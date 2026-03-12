@@ -2,7 +2,8 @@
 seed: 42
 device: cuda
 output_dir: outputs/vae
-data_root: data/morphomnist
+# Data on scratch
+data_root: /scratch/gilbreth/yu1331/datasets/global
 train_split: train
 val_split: val
 data_mode: images_csv

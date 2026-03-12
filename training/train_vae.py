@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -26,6 +27,11 @@ def parse_args() -> argparse.Namespace:
 def load_config(path: str) -> Dict[str, Any]:
     with open(path, "r") as f:
         cfg = yaml.safe_load(f)
+    # Expand env vars in string values (e.g. ${SCRATCH}/datasets/global)
+    if cfg:
+        for k, v in cfg.items():
+            if isinstance(v, str) and "$" in v:
+                cfg[k] = os.path.expandvars(v)
     return cfg
 
 
