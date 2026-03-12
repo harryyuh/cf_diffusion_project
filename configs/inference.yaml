@@ -1,0 +1,25 @@
+# Counterfactual inference
+seed: 42
+device: cuda
+output_dir: outputs/inference
+data_root: data/morphomnist
+split: test
+data_mode: images_csv
+batch_size: 16
+num_workers: 0
+vae_checkpoint: outputs/vae/checkpoints/vae_best.pt
+diffusion_checkpoint: outputs/diffusion/checkpoints/diffusion_best.pt
+latent_analysis_dir: outputs/logistic
+vae_latent_dim: 32
+vae_hidden_dims: [32, 64, 128]
+cond_input_dim: 33  # set to len(rest_dims) + 1 after running select_latent_dims
+cond_mlp_hidden_dim: 128
+cond_emb_dim: 128
+unet_base_channels: 32
+unet_channel_mults: [1, 2, 4]
+time_emb_dim: 128
+timesteps: 1000
+beta_start: 0.0001
+beta_end: 0.02
+thickness_targets: [0.2, 0.4, 0.6, 0.8]
+max_images: 100  # null for full set

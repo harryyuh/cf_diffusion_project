@@ -1,0 +1,18 @@
+# Logistic regression and latent selection
+seed: 42
+device: cuda
+output_dir: outputs/logistic
+data_root: data/morphomnist
+train_split: train
+data_mode: images_csv
+batch_size: 256
+num_workers: 0
+vae_checkpoint: outputs/vae/checkpoints/vae_best.pt
+latent_dim: 32
+hidden_dims: [32, 64, 128]
+in_channels: 1
+image_size: 28
+father_name: thickness
+father_threshold_mode: median
+# father_threshold_value: 0.5  # for quantile
+pvalue_threshold: 0.05

@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific: training outputs & data
+*.ckpt
+*.pt
+*.pth
+checkpoints/
+logs/
+wandb/
+outputs/
+runs/
+
+# Optional: uncomment if you don't want to track large data
+# data/
+# *.npy
+# *.npz

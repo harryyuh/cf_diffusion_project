@@ -1,0 +1,19 @@
+# VAE training config
+seed: 42
+device: cuda
+output_dir: outputs/vae
+data_root: data/morphomnist
+train_split: train
+val_split: val
+data_mode: images_csv
+# If using npz/pt: set train_data_file, val_data_file, image_key
+batch_size: 64
+num_workers: 0
+epochs: 100
+lr: 0.001
+latent_dim: 32
+beta_vae: 1.0
+recon_loss: mse
+in_channels: 1
+image_size: 28
+hidden_dims: [32, 64, 128]
