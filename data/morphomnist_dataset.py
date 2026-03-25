@@ -109,9 +109,11 @@ class MorphoMNISTDataset(Dataset):
             except (TypeError, ValueError):
                 continue
 
+        thickness = morpho_dict.get("thickness", 0.0)
         return {
             "image": img,
             "label": label,
             "morpho": morpho_dict,
+            "thickness": torch.tensor(thickness, dtype=torch.float32),
         }
 

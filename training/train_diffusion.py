@@ -1,11 +1,13 @@
 """
-Train conditional diffusion decoder p_theta(x | z_rest, f).
-VAE encoder is frozen; only diffusion model is trained.
+Train conditional diffusion decoder.
+
+- use_vae_condition=True (default): p_theta(x | z_rest, f), frozen VAE encoder, cond = concat(z_rest, f).
+- use_vae_condition=False: p_theta(x | f) with parent A only, cond = f (no VAE).
 """
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -15,31 +17,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data.morphomnist_dataset import MorphoMNISTDataset
-from models.condition_mlp import ConditionMLP, ConditionMLPConfig
 from models.diffusion_unet import ConditionedUNet, UNetConfig
 from models.vae import ConvVAE, VAEConfig
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.diffusion_utils import DiffusionConfig, GaussianDiffusion
-from utils.latent_utils import load_latent_splits, split_latents
 from utils.logger import get_logger
 from utils.seed import set_seed
-
-
-class ConditionalDiffusionModel(nn.Module):
-    """Wrapper: condition MLP + U-Net. Forward(x_t, t, cond_vector)."""
-
-    def __init__(
-        self,
-        cond_mlp: ConditionMLP,
-        unet: ConditionedUNet,
-    ) -> None:
-        super().__init__()
-        self.cond_mlp = cond_mlp
-        self.unet = unet
-
-    def forward(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        cond_emb = self.cond_mlp(cond)
-        return self.unet(x_t, t, cond_emb)
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,7 +43,14 @@ def main() -> None:
     device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
     set_seed(cfg.get("seed", 123))
 
-    output_dir = Path(cfg["output_dir"])
+    use_vae_condition = bool(cfg.get("use_vae_condition", True))
+    # Separate checkpoint roots: base output_dir / with_vae_condition | parent_only (or checkpoint_subdir)
+    base_output = Path(cfg["output_dir"])
+    if cfg.get("checkpoint_subdir"):
+        run_subdir = str(cfg["checkpoint_subdir"])
+    else:
+        run_subdir = "with_vae_condition" if use_vae_condition else "parent_only"
+    output_dir = base_output / run_subdir
     ckpt_dir = output_dir / "checkpoints"
     log_dir = output_dir / "logs"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -68,29 +58,44 @@ def main() -> None:
 
     logger = get_logger("train_diffusion", log_dir=log_dir)
     logger.info(f"Config: {json.dumps(cfg, indent=2)}")
-
-    # Load latent split
-    analysis_dir = Path(cfg["latent_analysis_dir"])
-    father_dims, rest_dims = load_latent_splits(
-        analysis_dir / "father_dims.json",
-        analysis_dir / "rest_dims.json",
+    logger.info(
+        f"Checkpoints under {output_dir} (use_vae_condition={use_vae_condition}, subdir={run_subdir})"
     )
-    logger.info(f"Using rest_dims: {len(rest_dims)} dims")
 
-    # Frozen VAE encoder
-    vae_config = VAEConfig(
-        in_channels=cfg.get("in_channels", 1),
-        latent_dim=cfg["vae_latent_dim"],
-        hidden_dims=tuple(cfg.get("vae_hidden_dims", [32, 64, 128])),
-        image_size=cfg.get("image_size", 28),
-    )
-    vae = ConvVAE(vae_config)
-    vae_ckpt = load_checkpoint(Path(cfg["vae_checkpoint"]), model=vae, map_location="cpu")
-    vae = vae.to(device)
-    for p in vae.parameters():
-        p.requires_grad = False
-    vae.eval()
-    logger.info("VAE encoder loaded and frozen.")
+    vae: Optional[ConvVAE] = None
+    n_parent_dims = 0
+    rest_dim = 0
+
+    if use_vae_condition:
+        # Load VAE config to determine latent_dim and n_parent_dims (first part = parent, rest = z_rest)
+        vae_cfg_path = cfg.get("vae_config", "configs/vae.yaml")
+        with open(vae_cfg_path, "r") as f:
+            vae_cfg = yaml.safe_load(f)
+        latent_dim = vae_cfg["latent_dim"]
+        n_parent_dims = vae_cfg.get("n_parent_dims", 0)
+        rest_dim = latent_dim - n_parent_dims
+        logger.info(f"Using latent_dim={latent_dim}, n_parent_dims={n_parent_dims}, z_rest_dim={rest_dim}")
+
+        # Frozen VAE encoder
+        vae_config = VAEConfig(
+            in_channels=vae_cfg.get("in_channels", 1),
+            latent_dim=latent_dim,
+            hidden_dims=tuple(vae_cfg.get("hidden_dims", [32, 64, 128])),
+            image_size=vae_cfg.get("image_size", 28),
+            n_parent_dims=n_parent_dims,
+            parent_pred_hidden=vae_cfg.get("parent_pred_hidden", 32),
+            use_adversary=vae_cfg.get("use_adversary", False),
+            adv_hidden=vae_cfg.get("adv_hidden", 32),
+        )
+        vae = ConvVAE(vae_config)
+        vae_ckpt = load_checkpoint(Path(cfg["vae_checkpoint"]), model=vae, map_location="cpu")
+        vae = vae.to(device)
+        for p in vae.parameters():
+            p.requires_grad = False
+        vae.eval()
+        logger.info("VAE encoder loaded and frozen.")
+    else:
+        logger.info("use_vae_condition=False: training diffusion with parent A only (cond_dim=1). VAE not loaded.")
 
     # Dataset
     train_dataset = MorphoMNISTDataset(
@@ -101,6 +106,8 @@ def main() -> None:
         metadata_file=cfg.get("train_metadata_file"),
         image_key=cfg.get("image_key", "images"),
     )
+    father_key = cfg.get("father_key", "thickness")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=cfg.get("batch_size", 64),
@@ -109,32 +116,24 @@ def main() -> None:
         pin_memory=(device.type == "cuda"),
     )
 
-    # Condition: concat(z_rest, f). z_rest has len(rest_dims), f is 1 scalar.
-    cond_input_dim = len(rest_dims) + 1
-    cond_mlp_config = ConditionMLPConfig(
-        input_dim=cond_input_dim,
-        hidden_dim=cfg.get("cond_mlp_hidden_dim", 128),
-        output_dim=cfg.get("cond_emb_dim", 128),
-        dropout=cfg.get("cond_mlp_dropout", 0.0),
-    )
-    cond_mlp = ConditionMLP(cond_mlp_config).to(device)
-
+    cond_dim = rest_dim + 1 if use_vae_condition else 1
     unet_config = UNetConfig(
         in_channels=cfg.get("in_channels", 1),
         base_channels=cfg.get("unet_base_channels", 32),
         channel_mults=tuple(cfg.get("unet_channel_mults", [1, 2, 4])),
         time_emb_dim=cfg.get("time_emb_dim", 128),
-        cond_emb_dim=cfg.get("cond_emb_dim", 128),
+        cond_dim=cond_dim,
     )
     unet = ConditionedUNet(unet_config).to(device)
 
-    model = ConditionalDiffusionModel(cond_mlp, unet).to(device)
+    model = unet
     optimizer = optim.Adam(model.parameters(), lr=cfg.get("lr", 1e-4))
 
     diff_config = DiffusionConfig(
         timesteps=cfg.get("timesteps", 1000),
         beta_start=cfg.get("beta_start", 1e-4),
         beta_end=cfg.get("beta_end", 0.02),
+        ddim_eta=cfg.get("ddim_eta", 0.0),
     )
     diffusion = GaussianDiffusion(diff_config)
     for attr in (
@@ -144,9 +143,24 @@ def main() -> None:
         setattr(diffusion, attr, getattr(diffusion, attr).to(device))
 
     epochs = cfg.get("epochs", 100)
-    best_loss = float("inf")
 
-    for epoch in range(epochs):
+    # Resume from last checkpoint if available
+    last_ckpt_path = ckpt_dir / "diffusion_last.pt"
+    start_epoch = 0
+    best_loss = float("inf")
+    if last_ckpt_path.exists():
+        ckpt = torch.load(last_ckpt_path, map_location=device)
+        if "unet_state_dict" in ckpt:
+            unet.load_state_dict(ckpt["unet_state_dict"])
+        if "optimizer_state_dict" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "epoch" in ckpt:
+            start_epoch = ckpt["epoch"]
+        if "train_loss" in ckpt:
+            best_loss = ckpt["train_loss"]
+        logger.info(f"Resuming diffusion training from epoch {start_epoch} using {last_ckpt_path}")
+
+    for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
         n_batches = 0
@@ -154,14 +168,17 @@ def main() -> None:
 
         for batch in pbar:
             x = batch["image"].to(device)
-            f = batch["thickness"].to(device).float().unsqueeze(1)  # (B, 1)
+            f = batch[father_key].to(device).float().unsqueeze(1)  # (B, 1)
 
-            with torch.no_grad():
-                mu, logvar = vae.encode(x)
-                z = mu  # use mean for conditioning
-                split = split_latents(z, father_dims, rest_dims)
-                z_rest = split["z_rest"]  # (B, len(rest_dims))
-            cond = torch.cat([z_rest, f], dim=1)  # (B, cond_input_dim)
+            if use_vae_condition:
+                assert vae is not None
+                with torch.no_grad():
+                    mu, logvar = vae.encode(x)
+                    z = mu  # use mean for conditioning
+                    z_rest = z[:, n_parent_dims:]  # (B, rest_dim)
+                cond = torch.cat([z_rest, f], dim=1)  # (B, rest_dim + 1)
+            else:
+                cond = f  # (B, 1) parent only
 
             # Sample t and noise
             b = x.size(0)
@@ -185,11 +202,11 @@ def main() -> None:
 
         state = {
             "epoch": epoch + 1,
-            "cond_mlp_state_dict": cond_mlp.state_dict(),
             "unet_state_dict": unet.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "config": cfg,
             "train_loss": mean_loss,
+            "use_vae_condition": use_vae_condition,
         }
         save_checkpoint(state, ckpt_dir, "diffusion_last.pt")
         if mean_loss < best_loss:

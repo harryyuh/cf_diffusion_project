@@ -1,25 +1,46 @@
-# Counterfactual inference
 seed: 42
 device: cuda
-output_dir: outputs/inference
-data_root: data/morphomnist
+output_dir: /scratch/gilbreth/yu1331/inference/cf_inference
+data_root: /scratch/gilbreth/yu1331/datasets/global
+father_key: thickness
 split: test
 data_mode: images_csv
 batch_size: 16
 num_workers: 0
-vae_checkpoint: outputs/vae/checkpoints/vae_best.pt
-diffusion_checkpoint: outputs/diffusion/checkpoints/diffusion_best.pt
-latent_analysis_dir: outputs/logistic
-vae_latent_dim: 32
-vae_hidden_dims: [32, 64, 128]
-cond_input_dim: 33  # set to len(rest_dims) + 1 after running select_latent_dims
-cond_mlp_hidden_dim: 128
-cond_emb_dim: 128
+# Must match the diffusion checkpoint: true = concat(z_rest, f), false = f only.
+use_vae_condition: true
+vae_checkpoint: /scratch/gilbreth/yu1331/ckpts/cf_vae/checkpoints/vae_best.pt
+# Trained with use_vae_condition=false -> parent_only/ (VAE ckpt above unused at inference).
+diffusion_checkpoint: /scratch/gilbreth/yu1331/ckpts/cf_diffusion/checkpoints/diffusion_best.pt
+vae_config: configs/vae.yaml
 unet_base_channels: 32
-unet_channel_mults: [1, 2, 4]
+unet_channel_mults:
+- 1
+- 2
+- 4
 time_emb_dim: 128
 timesteps: 1000
 beta_start: 0.0001
 beta_end: 0.02
-thickness_targets: [0.2, 0.4, 0.6, 0.8]
-max_images: 100  # null for full set
+thickness_targets:
+- 1.2
+- 2.6
+- 4.2
+max_images: 45
+debug_stats: true
+sampling_mode: from_xt
+# from_xt: x_t via multi-step DDIM inversion (model eps each step). false = one-shot q_sample + randn.
+use_ddim_inversion: true
+# Fallback when reconstruction_start_t_list is not provided.
+start_t: 200
+# DDIM reverse: ddim_eta=0 is deterministic DDIM (also used for reconstruction from_xt).
+ddim_eta: 0.0
+# For each t below, inference now outputs BOTH:
+# - reconstruction_start{t}_group_*.png
+# - counterfactual_start{t}_f*_group_*.png
+reconstruction_start_t_list:
+  - 100
+  - 200
+  - 300
+# Set to [] to skip counterfactuals and only run reconstruction.
+# thickness_targets: []

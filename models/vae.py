@@ -1,16 +1,38 @@
 from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+class GradientReversalLayer(torch.autograd.Function):
+    """
+    Forward: identity. Backward: multiply gradient by -scale.
+    Used so that when loss_adv = MSE(D(GRL(z_rest)), A) is minimized,
+    the encoder receives gradient that maximizes this MSE (i.e. makes z_rest bad for predicting A).
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, scale: float) -> torch.Tensor:
+        ctx.scale = scale
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return grad_output.neg() * ctx.scale, None
 
 
 @dataclass
 class VAEConfig:
     in_channels: int = 1
     latent_dim: int = 32
-    hidden_dims = (32, 64, 128)
+    hidden_dims: tuple = (32, 64, 128)
     image_size: int = 28
+    # First n_parent_dims of z are used to predict parent (e.g. thickness); rest is z_rest. 0 = off.
+    n_parent_dims: int = 0
+    parent_pred_hidden: int = 32  # hidden size of parent predictor MLP
+    # Adversary: D(z_rest) -> A. If use_adversary=True, encoder gets reversed grad so z_rest cannot predict A.
+    use_adversary: bool = False
+    adv_hidden: int = 32
 
 
 class ConvVAE(nn.Module):
@@ -85,6 +107,29 @@ class ConvVAE(nn.Module):
             nn.Sigmoid(),
         )
 
+        # Optional: predict parent A from first n_parent_dims of z (regression)
+        self.n_parent_dims = getattr(config, "n_parent_dims", 0) or 0
+        if self.n_parent_dims > 0 and self.n_parent_dims <= config.latent_dim:
+            self.parent_predictor = nn.Sequential(
+                nn.Linear(self.n_parent_dims, config.parent_pred_hidden),
+                nn.ReLU(inplace=True),
+                nn.Linear(config.parent_pred_hidden, 1),
+            )
+            n_rest = config.latent_dim - self.n_parent_dims
+            use_adv = getattr(config, "use_adversary", False)
+            if use_adv and n_rest > 0:
+                self.grl_scale = 1.0
+                self.adversary = nn.Sequential(
+                    nn.Linear(n_rest, getattr(config, "adv_hidden", 32)),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(getattr(config, "adv_hidden", 32), 1),
+                )
+            else:
+                self.adversary = None
+        else:
+            self.parent_predictor = None
+            self.adversary = None
+
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Encode images into latent distribution parameters.
@@ -130,14 +175,23 @@ class ConvVAE(nn.Module):
         x = self.decoder_input(z)
         x = x.view(z.size(0), -1, 1, 1)
         # We need to reshape to encoder output shape
-        # Determine the shape by re-encoding a dummy once
+        # Determine the shape by re-encoding a dummy once (same device as z)
         with torch.no_grad():
-            dummy = torch.zeros(1, self.config.in_channels, self.config.image_size, self.config.image_size)
+            dummy = torch.zeros(
+                1, self.config.in_channels, self.config.image_size, self.config.image_size,
+                device=z.device, dtype=z.dtype,
+            )
             enc_out = self.encoder(dummy)
         ch, h, w = enc_out.shape[1:]
         x = x.view(z.size(0), ch, h, w)
         x = self.decoder(x)
         x = self.final_layer(x)
+        # Decoder may not match exact image_size (e.g. 32x32 vs 28x28); resize to target
+        if x.shape[2] != self.config.image_size or x.shape[3] != self.config.image_size:
+            x = F.interpolate(
+                x, size=(self.config.image_size, self.config.image_size),
+                mode="bilinear", align_corners=False,
+            )
         return x
 
     def forward(self, x: torch.Tensor) -> dict:
@@ -148,12 +202,21 @@ class ConvVAE(nn.Module):
             x: Input images.
 
         Returns:
-            dict with keys: recon, mu, logvar, z.
+            dict with keys: recon, mu, logvar, z; if n_parent_dims > 0 also parent_pred, z_rest.
         """
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         recon = self.decode(z)
-        return {"recon": recon, "mu": mu, "logvar": logvar, "z": z}
+        out = {"recon": recon, "mu": mu, "logvar": logvar, "z": z}
+        if self.parent_predictor is not None:
+            z_part1 = z[:, : self.n_parent_dims]
+            out["parent_pred"] = self.parent_predictor(z_part1)
+            z_rest = z[:, self.n_parent_dims :]
+            out["z_rest"] = z_rest
+            if self.adversary is not None:
+                # GRL in forward: identity; backward will reverse grad so encoder gets "maximize adv loss"
+                out["z_rest_grl"] = GradientReversalLayer.apply(z_rest, self.grl_scale)
+        return out
 
 
 def beta_vae_loss(

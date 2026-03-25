@@ -1,10 +1,13 @@
 import argparse
 import json
+import math
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader
@@ -91,6 +94,10 @@ def main() -> None:
         latent_dim=cfg["latent_dim"],
         hidden_dims=tuple(cfg.get("hidden_dims", [32, 64, 128])),
         image_size=cfg.get("image_size", 28),
+        n_parent_dims=cfg.get("n_parent_dims", 0),
+        parent_pred_hidden=cfg.get("parent_pred_hidden", 32),
+        use_adversary=cfg.get("use_adversary", False),
+        adv_hidden=cfg.get("adv_hidden", 32),
     )
     model = ConvVAE(vae_config).to(device)
     optimizer = optim.Adam(model.parameters(), lr=cfg.get("lr", 1e-3))
@@ -98,6 +105,9 @@ def main() -> None:
     epochs = cfg.get("epochs", 100)
     beta = cfg.get("beta_vae", 1.0)
     recon_loss_type = cfg.get("recon_loss", "mse")
+    parent_pred_weight = cfg.get("parent_pred_weight", 0.0)  # lambda for |phi(z1)-A|^2
+    adv_weight = cfg.get("adv_weight", 0.0)  # lambda_adv: encoder gets reversed grad so z_rest cannot predict A
+    father_key = cfg.get("father_key", "thickness")
     best_val_loss = float("inf")
 
     for epoch in range(epochs):
@@ -105,6 +115,8 @@ def main() -> None:
         train_loss_sum = 0.0
         train_recon_sum = 0.0
         train_kl_sum = 0.0
+        train_parent_sum = 0.0
+        train_adv_sum = 0.0
         n_batches = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
 
@@ -115,6 +127,23 @@ def main() -> None:
                 out["recon"], x, out["mu"], out["logvar"],
                 beta=beta, recon_loss_type=recon_loss_type,
             )
+            A = batch[father_key].to(device).float().unsqueeze(1)
+            if "parent_pred" in out and parent_pred_weight > 0:
+                parent_loss = F.mse_loss(out["parent_pred"], A)
+                loss = loss + parent_pred_weight * parent_loss
+                components["parent_loss"] = parent_loss
+                train_parent_sum += parent_loss.item()
+            if "z_rest_grl" in out and adv_weight > 0:
+                adv_pred = model.adversary(out["z_rest_grl"])
+                adv_loss = F.mse_loss(adv_pred, A)
+                loss = loss + adv_weight * adv_loss
+                components["adv_loss"] = adv_loss
+                train_adv_sum += adv_loss.item()
+
+            if not math.isfinite(loss.item()):
+                logger.error(f"Non-finite loss (epoch {epoch+1}, batch {n_batches}): {loss.item()}. Stopping.")
+                sys.exit(1)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -141,13 +170,23 @@ def main() -> None:
                     out["recon"], x, out["mu"], out["logvar"],
                     beta=beta, recon_loss_type=recon_loss_type,
                 )
+                A_val = batch[father_key].to(device).float().unsqueeze(1)
+                if "parent_pred" in out and parent_pred_weight > 0:
+                    loss = loss + parent_pred_weight * F.mse_loss(out["parent_pred"], A_val)
+                if "z_rest_grl" in out and adv_weight > 0:
+                    adv_pred = model.adversary(out["z_rest_grl"])
+                    loss = loss + adv_weight * F.mse_loss(adv_pred, A_val)
                 val_loss_sum += loss.item() * x.size(0)
                 val_n += x.size(0)
         val_loss = val_loss_sum / val_n if val_n else float("inf")
 
-        logger.info(
-            f"Epoch {epoch+1} train_loss={train_loss:.4f} recon={train_recon:.4f} kl={train_kl:.4f} val_loss={val_loss:.4f}"
-        )
+        log_msg = f"Epoch {epoch+1} train_loss={train_loss:.4f} recon={train_recon:.4f} kl={train_kl:.4f}"
+        if parent_pred_weight > 0:
+            log_msg += f" parent={train_parent_sum / n_batches:.4f}"
+        if adv_weight > 0:
+            log_msg += f" adv={train_adv_sum / n_batches:.4f}"
+        log_msg += f" val_loss={val_loss:.4f}"
+        logger.info(log_msg)
 
         # Save sample reconstructions every 10 epochs
         if (epoch + 1) % 10 == 0 or epoch == 0:

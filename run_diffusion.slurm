@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=cf_vae_morpho
+#SBATCH --job-name=cf_diffusion
 #SBATCH --nodes=1
-#SBATCH --partition=a10
+#SBATCH --partition=a100-40gb
 #SBATCH --account=statdept
 #SBATCH --qos=standby
 #SBATCH --time=04:00:00
@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 
-#SBATCH --output=job.%j.out
+#SBATCH --output=inference.%j.out
 #SBATCH --mail-user=yu1331@purdue.edu
 #SBATCH --mail-type=END,FAIL
 
@@ -32,18 +32,11 @@ cd "$SLURM_SUBMIT_DIR"
 export PYTHONPATH="$SLURM_SUBMIT_DIR:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
-# Checkpoints and logs on scratch
-export CKPT_ROOT="${SCRATCH:-$HOME}/cf_vae_morpho"
-mkdir -p "$CKPT_ROOT"
-mkdir -p "$CKPT_ROOT/logs"
-
-# Redirect outputs from config into this run (optional)
-export VAE_OUTPUT_DIR="$CKPT_ROOT"
-
 on_usr1() {
   echo "[`date`] Got SIGUSR1. Requeueing job $SLURM_JOB_ID ..."
   scontrol requeue "$SLURM_JOB_ID" || echo "WARN: requeue failed."
 }
 trap on_usr1 USR1
 
-python training/train_vae.py --config configs/vae.yaml
+python training/train_diffusion.py --config configs/diffusion.yaml
+
