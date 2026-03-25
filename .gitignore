@@ -45,7 +45,7 @@ logs/
 wandb/
 outputs/
 runs/
-
+*.out
 # Optional: uncomment if you don't want to track large data
 # data/
 # *.npy
