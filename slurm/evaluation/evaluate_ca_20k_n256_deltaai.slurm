@@ -35,7 +35,9 @@ OUT=/work/nvme/bhje/hyu29/evaluations/celeba/training_time/ca_20k_bs2_n256/step_
 mkdir -p "${OUT}"
 
 python -m evaluation.compare_causal_adapter_parent_only_celeba \
+  --skip-parent-only \
   --causal-adapter-root "${CA_ROOT}" \
+  --parent-config configs/diffusion_celeba_parent_only_deltaai.yaml \
   --selection-json /work/nvme/bhje/hyu29/evaluations/celeba/selection/selection_val_balanced_n256_seed42.json \
   --max-samples 256 --batch-size 4 \
   --ca-base-model-path "${BASE}" \

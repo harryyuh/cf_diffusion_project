@@ -12,7 +12,9 @@ from torchvision import transforms
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="PixArt-alpha/PixArt-XL-2-256x256")
+    # The 256px repository contains transformer weights only. The 512px
+    # repository is a complete Diffusers pipeline with model_index.json.
+    p.add_argument("--model", default="PixArt-alpha/PixArt-XL-2-512x512")
     p.add_argument("--image", required=True)
     p.add_argument("--output-dir", required=True)
     p.add_argument("--steps", type=int, default=50)
@@ -88,9 +90,10 @@ def main():
     prompt_embeds, prompt_mask = encoded[0], encoded[1]
 
     image = Image.open(args.image).convert("RGB")
+    resolution = int(pipe.transformer.config.sample_size) * int(pipe.vae_scale_factor)
     tfm = transforms.Compose([
         transforms.CenterCrop(150),
-        transforms.Resize((256, 256)),
+        transforms.Resize((resolution, resolution)),
         transforms.ToTensor(),
         transforms.Normalize([0.5] * 3, [0.5] * 3),
     ])

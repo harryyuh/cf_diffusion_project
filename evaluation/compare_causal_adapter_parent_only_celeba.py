@@ -86,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ca-invert-guidance-scale", type=float, default=1.0)
     p.add_argument("--output-json", required=True)
     p.add_argument("--output-grid", default="")
+    p.add_argument("--skip-parent-only", action="store_true")
     return p.parse_args()
 
 
@@ -399,9 +400,9 @@ def main() -> None:
     subset: Dataset = FilenameSubset(ds, indices)
     loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    po_gen = ParentOnlyGenerator(parent_cfg_path, args.parent_start_t, device)
+    po_gen = None if args.skip_parent_only else ParentOnlyGenerator(parent_cfg_path, args.parent_start_t, device)
     ca_gen = CausalAdapterGenerator(args, device, Path(parent_cfg["data_root"]))
-    method_names = ("parent_only_diffusion", "causal_adapter")
+    method_names = ("causal_adapter",) if args.skip_parent_only else ("parent_only_diffusion", "causal_adapter")
     accum: Dict[str, Dict[str, Any]] = {
         name: {
             "eff_predictions": {a: [] for a in COMPLEX_ATTRS},
@@ -429,13 +430,13 @@ def main() -> None:
     for batch in tqdm(loader, desc="compare"):
         real = ca_gen.official_real64(batch)
         ca_cf = ca_gen(batch)
-        po_cf = {k: ca_cf[k].detach() for k in COMPLEX_ATTRS}
-        po_cf["image"] = po_gen(batch)["image"].detach()
+        method_outputs = [("causal_adapter", ca_cf)]
+        if po_gen is not None:
+            po_cf = {k: ca_cf[k].detach() for k in COMPLEX_ATTRS}
+            po_cf["image"] = po_gen(batch)["image"].detach()
+            method_outputs.insert(0, ("parent_only_diffusion", po_cf))
 
-        for name, cf in (
-            ("parent_only_diffusion", po_cf),
-            ("causal_adapter", ca_cf),
-        ):
+        for name, cf in method_outputs:
             e, _raw = effectiveness(cf, unnormalize_celeba, predictors, "celeba")
             slot = accum[name]
             for a in COMPLEX_ATTRS:
