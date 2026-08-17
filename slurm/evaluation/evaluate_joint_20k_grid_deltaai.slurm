@@ -15,6 +15,7 @@ set -eo pipefail
 source /etc/profile.d/modules.sh 2>/dev/null || true
 module load python/miniforge3_pytorch/2.10.0
 conda activate base
+source /work/nvme/bhje/hyu29/venvs/cf-celeba/bin/activate
 set -u
 PROJECT=/work/nvme/bhje/hyu29/repos/cf-diffusion-celeba
 ROOT=/work/nvme/bhje/hyu29/ckpts/celeba/joint_label_lora/joint_20k_bs2/checkpoints
@@ -43,5 +44,7 @@ python -m evaluation.evaluate_latent_prompt_lora_celeba \
   --editing standard --condition-mode joint_label --inversion ddim \
   --causal-adapter-scm /work/nvme/bhje/hyu29/ckpts/celeba/causal_adapter_scm/best_model.pt \
   --target-scm causal_adapter --intervention-attr "${ATTR}" \
+  --causal-adapter-root "${PROJECT}/external/Causal-Adapter" \
+  --benchmark-root "${PROJECT}/external/Causal-Adapter/counterfactual-benchmark/counterfactual_benchmark" \
   --output-grid "${OUT}/grid_do_${ATTR}_source_cf.png" \
   --output-json "${OUT}/grid_metrics_do_${ATTR}.json"

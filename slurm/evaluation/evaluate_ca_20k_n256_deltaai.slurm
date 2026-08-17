@@ -16,6 +16,7 @@ set -eo pipefail
 source /etc/profile.d/modules.sh 2>/dev/null || true
 module load python/miniforge3_pytorch/2.10.0
 conda activate base
+source /work/nvme/bhje/hyu29/venvs/cf-celeba/bin/activate
 set -u
 PROJECT=/work/nvme/bhje/hyu29/repos/cf-diffusion-celeba
 CA_ROOT=${PROJECT}/external/Causal-Adapter
@@ -34,6 +35,7 @@ OUT=/work/nvme/bhje/hyu29/evaluations/celeba/training_time/ca_20k_bs2_n256/step_
 mkdir -p "${OUT}"
 
 python -m evaluation.compare_causal_adapter_parent_only_celeba \
+  --causal-adapter-root "${CA_ROOT}" \
   --selection-json /work/nvme/bhje/hyu29/evaluations/celeba/selection/selection_val_balanced_n256_seed42.json \
   --max-samples 256 --batch-size 4 \
   --ca-base-model-path "${BASE}" \

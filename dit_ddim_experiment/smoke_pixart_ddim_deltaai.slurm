@@ -14,6 +14,7 @@ set -eo pipefail
 source /etc/profile.d/modules.sh 2>/dev/null || true
 module load python/miniforge3_pytorch/2.10.0
 conda activate base
+source /work/nvme/bhje/hyu29/venvs/cf-celeba/bin/activate
 set -u
 
 PROJECT=/work/nvme/bhje/hyu29/repos/cf-diffusion-celeba
