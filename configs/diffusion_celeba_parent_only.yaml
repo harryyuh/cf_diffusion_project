@@ -1,0 +1,43 @@
+# Parent-only: no VAE loaded; UNet cond is parent (gender) only.
+# Checkpoints: .../parent_only/
+seed: 42
+device: cuda
+output_dir: /scratch/gilbreth/yu1331/ckpts/celeba/cf_diffusion
+data_root: /scratch/gilbreth/yu1331/datasets/celebA
+
+celeba_attr_cols:
+  - Male
+  - Young
+  - Smiling
+  - Attractive
+  - Heavy_Makeup
+  - Wearing_Lipstick
+  - Mouth_Slightly_Open
+  - Eyeglasses
+  - Black_Hair
+  - Blond_Hair
+
+train_split: train
+batch_size: 16
+num_workers: 4
+
+use_vae_condition: false
+vae_checkpoint: ""
+vae_config: configs/vae_celeba.yaml
+
+parent_keys: [Male]
+
+in_channels: 3
+image_size: 64
+unet_arch: iddpm
+iddpm_model_channels: 128
+iddpm_num_res_blocks: 2
+iddpm_attention_resolutions: "16,8"
+iddpm_dropout: 0.0
+
+timesteps: 1000
+beta_start: 0.0001
+beta_end: 0.02
+ddim_eta: 0.0
+epochs: 100
+lr: 0.0001

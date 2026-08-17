@@ -1,0 +1,18 @@
+torch
+torchvision
+numpy
+pandas
+pyyaml
+tqdm
+scikit-learn
+matplotlib
+Pillow
+# counterfactual-benchmark classifiers (CelebaComplexClassifier, etc.)
+pytorch-lightning>=2.0
+torchmetrics
+# latent LoRA fine-tuning pipeline
+diffusers>=0.35.0
+peft>=0.13.0
+accelerate>=1.0
+safetensors
+

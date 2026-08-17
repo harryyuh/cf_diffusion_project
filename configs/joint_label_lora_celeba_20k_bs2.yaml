@@ -1,0 +1,42 @@
+seed: 42
+device: cuda
+output_dir: /scratch/gilbreth/yu1331/ckpts/celeba/joint_label_lora
+run_name: minisd_four_label_joint_tokens_balanced_20k_bs2
+
+data_root: /scratch/gilbreth/yu1331/datasets/celebA
+train_split: train
+image_size: 256
+center_crop_size: 150
+batch_size: 2
+num_workers: 4
+
+pretrained_model_name_or_path: /scratch/gilbreth/yu1331/huggingface/hub/models--lambdalabs--miniSD-diffusers/snapshots/26ed8a9bfbf76f46a6cf60517dde321f900c44ce
+model_family: sd
+mixed_precision: bf16
+
+celeba_attr_cols: [Young, Male, No_Beard, Bald]
+balanced_attr_cols: [No_Beard, Bald]
+balanced_sampler_power: 1.0
+
+# All four tokens are produced jointly from the complete four-label vector.
+# This is intentionally not factorized PAI c_i + g_i(y_i).
+pai_prompt: "a human is @ and * and & and #"
+pai_slot_tokens: ["@", "*", "&", "#"]
+pai_projector_hidden_dim: 256
+pai_init_std: 0.02
+pai_lr: 0.001
+
+lora_lr: 0.00005
+lora_rank: 16
+lora_alpha: 16
+lora_target_modules: [to_q, to_k, to_v, to_out.0]
+gradient_accumulation_steps: 1
+max_train_steps: 20000
+lr_scheduler: cosine
+lr_warmup_steps: 100
+weight_decay: 0.0
+max_grad_norm: 1.0
+adam_betas: [0.9, 0.999]
+log_every: 25
+save_every: 1000
+lambda_ctc: 0.0

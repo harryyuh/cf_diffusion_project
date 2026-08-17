@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+
+# Runtime outputs and large artifacts
+logs/
+outputs/
+evaluations/
+checkpoints/
+ckpts/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.tar
+*.tar.gz
+
+# Third-party repositories are installed separately on each cluster.
+external/
+
+# Local environments and caches
+.venv/
+venv/
+env/
+.cache/
+huggingface/

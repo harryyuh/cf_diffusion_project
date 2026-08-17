@@ -1,0 +1,13 @@
+seed: 42
+device: cuda
+data_root: /scratch/gilbreth/yu1331/datasets/celebA
+output_dir: /scratch/gilbreth/yu1331/ckpts/celeba/full_label_scm/causal_adapter_graph
+
+train_split: train
+val_split: val
+image_size: 64
+batch_size: 512
+num_workers: 4
+hidden_dim: 64
+epochs: 80
+lr: 0.001
