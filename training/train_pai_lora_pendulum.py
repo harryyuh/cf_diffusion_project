@@ -13,7 +13,11 @@ import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from models.prompt_aligned_injection import PromptAlignedInjection, find_slot_positions
+from models.prompt_aligned_injection import (
+    JointLabelTokenInjection,
+    PromptAlignedInjection,
+    find_slot_positions,
+)
 from data.pendulum_dataset import PENDULUM_ATTRS, PendulumDataset
 from utils.logger import get_logger
 from utils.seed import set_seed
@@ -210,7 +214,11 @@ def main() -> None:
     with torch.no_grad():
         sample_prompt = pipe.tokenizer([prompt], padding="max_length", truncation=True, max_length=pipe.tokenizer.model_max_length, return_tensors="pt")
         hidden_dim = int(pipe.text_encoder(sample_prompt.input_ids.to(device))[0].shape[-1])
-    mapper = PromptAlignedInjection(
+    condition_mode = str(cfg.get("condition_mode", "pai"))
+    if condition_mode not in {"pai", "joint_label"}:
+        raise ValueError(f"Unsupported condition_mode={condition_mode!r}; expected 'pai' or 'joint_label'.")
+    mapper_cls = JointLabelTokenInjection if condition_mode == "joint_label" else PromptAlignedInjection
+    mapper = mapper_cls(
         attr_names=attr_cols,
         hidden_dim=hidden_dim,
         projector_hidden_dim=int(cfg.get("pai_projector_hidden_dim", 256)),
@@ -236,7 +244,7 @@ def main() -> None:
     )
     epochs = int(math.ceil(max_train_steps / max(1, math.ceil(len(loader) / grad_accum))))
     logger.info(
-        f"Training continuous PAI + LoRA for {max_train_steps} steps; "
+        f"Training {condition_mode} + LoRA for {max_train_steps} steps; "
         f"prompt={prompt!r} slots={slot_tokens} output={output_dir}"
     )
 
@@ -299,7 +307,7 @@ def main() -> None:
             break
 
     save_hybrid_checkpoint(pipe, mapper, final_dir, global_step, cfg)
-    logger.info(f"Finished PAI + LoRA training at step={global_step}; saved {final_dir}")
+    logger.info(f"Finished {condition_mode} + LoRA training at step={global_step}; saved {final_dir}")
 
 
 if __name__ == "__main__":

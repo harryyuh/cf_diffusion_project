@@ -1,0 +1,13 @@
+seed: 42
+model: PixArt-alpha/PixArt-XL-2-512x512
+data_root: /work/nvme/bhje/hyu29/datasets/celebA
+output_dir: /work/nvme/bhje/hyu29/ckpts/celeba/pixart_lora
+run_name: pixart_four_causal_20k
+batch_size: 1
+num_workers: 4
+gradient_accumulation_steps: 4
+max_train_steps: 20000
+lr: 0.0001
+lora_rank: 16
+lora_alpha: 16
+target_modules: [to_q, to_k, to_v, to_out.0]

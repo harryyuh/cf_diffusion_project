@@ -14,7 +14,12 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from tqdm import tqdm
 
-from data.celeba_dataset import CELEBA_ATTR_ORDER, CelebADataset, expand_env_in_cfg
+from data.celeba_dataset import (
+    CELEBA_ATTR_ORDER,
+    CelebADataset,
+    build_ca_official_celeba_complex_sampler,
+    expand_env_in_cfg,
+)
 from models.prompt_aligned_injection import PromptAlignedInjection, find_slot_positions
 from utils.logger import get_logger
 from utils.seed import set_seed
@@ -177,7 +182,8 @@ def main() -> None:
     set_seed(int(cfg.get("seed", 42)))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if str(cfg.get("mixed_precision", "bf16")).lower() == "bf16" else torch.float16
+    precision = str(cfg.get("mixed_precision", "bf16")).lower()
+    dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "no": torch.float32, "fp32": torch.float32}[precision]
 
     from diffusers import DDPMScheduler, StableDiffusionPipeline
     from diffusers.optimization import get_scheduler
@@ -199,9 +205,15 @@ def main() -> None:
         factor_cols=attr_cols,
         image_size=image_size,
         center_crop_size=int(cfg.get("center_crop_size", 0) or 0),
+        random_horizontal_flip=bool(cfg.get("random_horizontal_flip", False)),
     )
     balanced_attr_cols = list(cfg.get("balanced_attr_cols") or [])
-    sampler = build_balanced_sampler(dataset, balanced_attr_cols, cfg) if balanced_attr_cols else None
+    official_sampler_schedule = bool(cfg.get("ca_official_sampler_schedule", False))
+    sampler = (
+        build_ca_official_celeba_complex_sampler(dataset)
+        if official_sampler_schedule
+        else (build_balanced_sampler(dataset, balanced_attr_cols, cfg) if balanced_attr_cols else None)
+    )
     if sampler is not None:
         logger.info(f"Using balanced sampler over attributes: {balanced_attr_cols}")
     loader = DataLoader(
@@ -280,6 +292,17 @@ def main() -> None:
     running_ctc = 0.0
     optimizer.zero_grad(set_to_none=True)
     for epoch in range(epochs):
+        if official_sampler_schedule and epoch > int(cfg.get("ca_uniform_after_epoch", 12)) and sampler is not None:
+            logger.info(f"Switching CA-official sampler to uniform shuffle at epoch={epoch}")
+            sampler = None
+            loader = DataLoader(
+                dataset,
+                batch_size=int(cfg.get("batch_size", 4)),
+                shuffle=True,
+                num_workers=int(cfg.get("num_workers", 4)),
+                pin_memory=(device.type == "cuda"),
+                drop_last=True,
+            )
         pbar = tqdm(loader, desc=f"epoch {epoch + 1}/{epochs}")
         for batch_idx, batch in enumerate(pbar):
             pixel_values = batch["image"].to(device=device, dtype=dtype) * 2.0 - 1.0
@@ -305,7 +328,10 @@ def main() -> None:
             running_mse += float((mse_loss.detach() / grad_accum).cpu())
             running_ctc += float((ctc_loss.detach() / grad_accum).cpu())
             if (batch_idx + 1) % grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(mapper.parameters(), float(cfg.get("max_grad_norm", 1.0)))
+                torch.nn.utils.clip_grad_norm_(
+                    list(mapper.parameters()) + list(_trainable_parameters(pipe.unet)),
+                    float(cfg.get("max_grad_norm", 1.0)),
+                )
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)

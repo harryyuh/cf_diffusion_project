@@ -1,0 +1,39 @@
+seed: 42
+device: cuda
+output_dir: /work/nvme/bhje/hyu29/ckpts/celeba/official_paper_protocol/pai_seed42
+run_name: minisd_pai_fp32_bs40_200k
+data_root: /work/nvme/bhje/hyu29/datasets/celebA
+train_split: train
+image_size: 256
+center_crop_size: 150
+random_horizontal_flip: true
+batch_size: 40
+num_workers: 8
+pretrained_model_name_or_path: lambdalabs/miniSD-diffusers
+model_family: sd
+mixed_precision: fp32
+celeba_attr_cols: [Young, Male, No_Beard, Bald]
+balanced_attr_cols: []
+ca_official_sampler_schedule: true
+ca_uniform_after_epoch: 12
+pai_prompt: "a human is @ and * and & and #"
+pai_slot_tokens: ["@", "*", "&", "#"]
+pai_projector_hidden_dim: 256
+pai_init_std: 0.02
+pai_lr: 0.00001
+lora_lr: 0.00001
+lora_rank: 16
+lora_alpha: 16
+lora_target_modules: [to_q, to_k, to_v, to_out.0]
+gradient_accumulation_steps: 1
+max_train_steps: 200000
+lr_scheduler: constant
+lr_warmup_steps: 0
+weight_decay: 0.01
+max_grad_norm: 1.0
+adam_betas: [0.9, 0.999]
+log_every: 100
+save_every: 10000
+lambda_ctc: 0.0005
+ctc_temperature: 0.2
+ctc_mode: attr_value

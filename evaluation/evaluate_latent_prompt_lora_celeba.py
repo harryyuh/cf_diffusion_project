@@ -182,6 +182,28 @@ def _binary_f1(pred: np.ndarray, target: np.ndarray) -> float:
     return float(2 * tp / d) if d > 0 else 0.0
 
 
+def _binary_accuracy(pred: np.ndarray, target: np.ndarray) -> float:
+    p = _binary_pred_labels(pred).reshape(-1).astype(bool)
+    t = np.asarray(target).reshape(-1) > 0.5
+    return float(np.equal(p, t).mean())
+
+
+def _binary_macro_f1(pred: np.ndarray, target: np.ndarray) -> float:
+    p = _binary_pred_labels(pred).reshape(-1).astype(bool)
+    t = np.asarray(target).reshape(-1) > 0.5
+    scores = []
+    for positive in (False, True):
+        pp, tt = p == positive, t == positive
+        tp = np.logical_and(pp, tt).sum(dtype=np.float64)
+        fp = np.logical_and(pp, ~tt).sum(dtype=np.float64)
+        fn = np.logical_and(~pp, tt).sum(dtype=np.float64)
+        denom = 2 * tp + fp + fn
+        # Only average classes present in either target or prediction.
+        if denom > 0:
+            scores.append(float(2 * tp / denom))
+    return float(np.mean(scores)) if scores else 1.0
+
+
 def _rate(values: np.ndarray, pred: bool) -> float:
     return float((_binary_pred_labels(values) if pred else (np.asarray(values).reshape(-1) > 0.5)).mean())
 
@@ -1094,6 +1116,14 @@ def main():
         },
         "method": f"minisd_{args.condition_mode}_lora_{args.editing}_{args.inversion}",
         "effectiveness": {a: _binary_f1(np.concatenate(preds[a], 0), np.concatenate(tgts[a], 0)) for a in COMPLEX_ATTRS},
+        "effectiveness_accuracy": {
+            a: _binary_accuracy(np.concatenate(preds[a], 0), np.concatenate(tgts[a], 0))
+            for a in COMPLEX_ATTRS
+        },
+        "effectiveness_macro_f1": {
+            a: _binary_macro_f1(np.concatenate(preds[a], 0), np.concatenate(tgts[a], 0))
+            for a in COMPLEX_ATTRS
+        },
         "effectiveness_debug": {
             a: {
                 "target_pos_rate": _rate(np.concatenate(tgts[a], 0), False),

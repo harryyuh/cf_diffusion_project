@@ -84,6 +84,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ca-steps", type=int, default=50)
     p.add_argument("--ca-guidance-scale", type=float, default=3.0)
     p.add_argument("--ca-invert-guidance-scale", type=float, default=1.0)
+    p.add_argument(
+        "--ca-batched-standard",
+        action="store_true",
+        help="Run standard CA DDIM on the full DataLoader batch instead of serializing images.",
+    )
     p.add_argument("--output-json", required=True)
     p.add_argument("--output-grid", default="")
     p.add_argument("--skip-parent-only", action="store_true")
@@ -204,6 +209,8 @@ class CausalAdapterGenerator:
             controlnet_path=args.ca_controlnet_path,
             text_embedding_path=args.ca_text_embedding_path,
             scm_path=args.ca_scm_path or None,
+            prompt="a human is @ and * and & and #",
+            presudo_words="@,*,&,#",
             device=device,
             torch_dtype=torch.float32,
         )
@@ -242,6 +249,43 @@ class CausalAdapterGenerator:
         intervention_attr = self.args.intervention_attr
         intervention_idx = COMPLEX_ATTRS.index(intervention_attr)
         target_attr = 1.0 - labels[intervention_attr]
+
+        # The upstream CA helper already supports batched latents, prompts and
+        # labels.  The old evaluator nevertheless called it once per image,
+        # making DataLoader batch_size=4 effectively batch_size=1.  Keep the
+        # serial P2P path unchanged; standard DDIM can safely use the native
+        # batched implementation.
+        if self.args.ca_batched_standard:
+            if self.args.ca_editing != "standard":
+                raise ValueError("--ca-batched-standard currently supports only --ca-editing standard")
+            if filenames is not None:
+                image_t = torch.cat([self._official_source(str(name)) for name in filenames], dim=0)
+            else:
+                image_t = self._source_to_ca(xs)
+            label = torch.cat([labels[k] for k in COMPLEX_ATTRS], dim=1)
+            target_labels = label.clone()
+            target_labels[:, intervention_idx] = target_attr[:, 0]
+            images, _, causal_cond, _ = self.ddim(
+                self.assets.pipe,
+                image_t,
+                label,
+                self.assets.presudo_token_ids,
+                [self.assets.prompt] * image_t.shape[0],
+                num_steps=self.args.ca_steps,
+                invert_guidance_scale=self.args.ca_invert_guidance_scale,
+                set_guidance_scale=self.args.ca_guidance_scale,
+                intervention_indx=None,
+                intervention_values=None,
+                return_PIL=True,
+                DSCM_labels=target_labels.unsqueeze(2),
+            )
+            if len(images) != image_t.shape[0]:
+                raise RuntimeError(f"Expected {image_t.shape[0]} CA images, got {len(images)}")
+            cf_labels = (causal_cond.squeeze(-1) > 0.5).float().to(self.device)
+            out = {k: cf_labels[:, j : j + 1].clone() for j, k in enumerate(COMPLEX_ATTRS)}
+            out["image"] = torch.stack([self._pil_to_tensor64(img) for img in images], dim=0).clamp(0, 1)
+            return out
+
         for i in range(xs.shape[0]):
             if filenames is not None:
                 image_t = self._official_source(str(filenames[i]))

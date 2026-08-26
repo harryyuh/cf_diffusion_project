@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, WeightedRandomSampler
 from torchvision import transforms
 
 # Official attribute order in ``list_attr_celeba.txt`` (line 2).
@@ -116,6 +116,7 @@ class CelebADataset(Dataset):
         factor_cols: Sequence[str],
         image_size: int = 64,
         center_crop_size: int = 0,
+        random_horizontal_flip: bool = False,
         partition_file: str = "list_eval_partition.txt",
         attr_file: str = "list_attr_celeba.txt",
     ) -> None:
@@ -125,6 +126,7 @@ class CelebADataset(Dataset):
         self.factor_cols = list(factor_cols)
         self.image_size = int(image_size)
         self.center_crop_size = int(center_crop_size or 0)
+        self.random_horizontal_flip = bool(random_horizontal_flip)
 
         part_path = self.root / partition_file
         attr_path = self.root / attr_file
@@ -155,6 +157,8 @@ class CelebADataset(Dataset):
         tfm_steps = []
         if self.center_crop_size > 0:
             tfm_steps.append(transforms.CenterCrop(self.center_crop_size))
+        if self.random_horizontal_flip:
+            tfm_steps.append(transforms.RandomHorizontalFlip())
         tfm_steps.extend(
             [
                 transforms.Resize((self.image_size, self.image_size), interpolation=transforms.InterpolationMode.BILINEAR),
@@ -182,6 +186,20 @@ class CelebADataset(Dataset):
             v = float(row.iloc[j])
             batch[col] = torch.tensor([v], dtype=torch.float32)
         return batch
+
+
+def build_ca_official_celeba_complex_sampler(dataset: CelebADataset) -> WeightedRandomSampler:
+    """Reproduce the released CA `(No_Beard, Bald)` four-class sampler."""
+    factors = dataset.factor_matrix(["No_Beard", "Bald"])
+    labels01 = ((factors + 1.0) / 2.0).astype(np.int64)
+    combined = labels01[:, 0] * 2 + labels01[:, 1]
+    class_counts = np.asarray([25301, 1690, 133756, 2023], dtype=np.float64)
+    sample_weights = (1.0 / class_counts)[combined]
+    return WeightedRandomSampler(
+        torch.as_tensor(sample_weights, dtype=torch.double),
+        num_samples=len(dataset),
+        replacement=True,
+    )
 
 
 def expand_env_in_cfg(cfg: Dict[str, Any]) -> None:

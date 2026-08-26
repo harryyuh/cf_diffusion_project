@@ -29,7 +29,7 @@ CA_GRAPH = torch.tensor([[0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 0, 0], [0, 0, 1, 0]]
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--method', choices=['ca', 'pai'], required=True)
+    p.add_argument('--method', choices=['ca', 'pai', 'joint_label'], required=True)
     p.add_argument('--data-root', default='/scratch/gilbreth/yu1331/datasets/pendulum')
     p.add_argument('--ca-root', default='/home/yu1331/cf-diffusion-celeba/external/Causal-Adapter')
     p.add_argument('--base-model', default='lambdalabs/miniSD-diffusers')
@@ -38,6 +38,8 @@ def parse_args():
     p.add_argument('--ca-scm', default='/scratch/gilbreth/yu1331/models/Causal-Adapter/pendulum/scm/best_model.pt')
     p.add_argument('--pai-config', default='configs/pai_lora_pendulum.yaml')
     p.add_argument('--pai-root', default='/scratch/gilbreth/yu1331/ckpts/pendulum/pai_lora/minisd_continuous_pai_lora/final')
+    p.add_argument('--joint-config', default='configs/joint_label_lora_pendulum.yaml')
+    p.add_argument('--joint-root', default='/scratch/gilbreth/yu1331/ckpts/pendulum/joint_label_lora/minisd_joint_label_lora/final')
     p.add_argument('--regressor', default='/scratch/gilbreth/yu1331/ckpts/pendulum/regressor/best.pt')
     p.add_argument('--output-dir', required=True)
     p.add_argument('--max-samples', type=int, default=256)
@@ -100,14 +102,14 @@ def tensor_to_pil(images: torch.Tensor):
 
 
 class PAIEditor:
-    def __init__(self, config_path: str, root: str, device: torch.device, steps: int):
+    def __init__(self, config_path: str, root: str, device: torch.device, steps: int, condition_mode: str = 'pai'):
         from evaluation.evaluate_latent_prompt_lora_celeba import PromptLoraEditor
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
         self.inner = PromptLoraEditor(
             cfg, Path(root) / 'lora', device, steps, guidance_scale=1.0,
             invert_guidance_scale=1.0, negative_prompt='', scheduler_mode='ca',
-            vae_latent_mode='mean', condition_mode='pai',
+            vae_latent_mode='mean', condition_mode=condition_mode,
             pai_checkpoint=Path(root) / 'mapper' / 'pai_mapper.pt',
         )
         self.inner.image_tfm = transforms.Compose([
@@ -212,7 +214,12 @@ def main():
 
     scm = load_scm(args.ca_root, args.ca_scm, device)
     regressor = load_regressor(args.regressor, device)
-    editor = CAEditor(args, device) if args.method == 'ca' else PAIEditor(args.pai_config, args.pai_root, device, args.steps)
+    if args.method == 'ca':
+        editor = CAEditor(args, device)
+    elif args.method == 'joint_label':
+        editor = PAIEditor(args.joint_config, args.joint_root, device, args.steps, 'joint_label')
+    else:
+        editor = PAIEditor(args.pai_config, args.pai_root, device, args.steps, 'pai')
     results = {'method': args.method, 'n': len(indices), 'steps': args.steps, 'interventions': {}}
 
     for do_idx, do_name in enumerate(PENDULUM_ATTRS):
@@ -251,11 +258,17 @@ def main():
         make_pair_grid(grid_records, grid_root / f'{do_name}.png', f'{args.method.upper()} do({do_name})')
         results['interventions'][do_name] = {
             'target_mae_raw': {name: float(mae[i]) for i, name in enumerate(PENDULUM_ATTRS)},
+            'intervened_variable_mae_raw': float(mae[do_idx]),
+            'intervened_variable_mae_normalized': float(
+                mae[do_idx] / (PENDULUM_MINMAX[do_idx, 1] - PENDULUM_MINMAX[do_idx, 0])
+            ),
             'mean_target_mae_raw': float(mae.mean()),
             'pixel_mae_01': pixel_mae / seen,
         }
-    per_do = [x['mean_target_mae_raw'] for x in results['interventions'].values()]
-    results['mean_over_interventions'] = float(np.mean(per_do))
+    per_do = [x['intervened_variable_mae_raw'] for x in results['interventions'].values()]
+    per_do_normalized = [x['intervened_variable_mae_normalized'] for x in results['interventions'].values()]
+    results['mean_intervened_variable_mae_raw'] = float(np.mean(per_do))
+    results['mean_intervened_variable_mae_normalized'] = float(np.mean(per_do_normalized))
     (output / 'metrics.json').write_text(json.dumps(results, indent=2))
     print(json.dumps(results, indent=2))
 
