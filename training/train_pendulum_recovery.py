@@ -242,6 +242,18 @@ def main() -> None:
         projector_hidden_dim=int(cfg.get("pai_projector_hidden_dim", 256)),
         init_std=float(cfg.get("pai_init_std", 0.02)),
     ).to(device)
+    warm_start = cfg.get("warm_start_checkpoint")
+    if not warm_start:
+        raise ValueError("Recovery training requires warm_start_checkpoint")
+    from peft import get_peft_model_state_dict, set_peft_model_state_dict
+    state = torch.load(warm_start, map_location="cpu")
+    mapper.load_state_dict(state["mapper_state_dict"], strict=True)
+    set_peft_model_state_dict(pipe.unet, state["unet_lora_state_dict"])
+    loaded_lora = get_peft_model_state_dict(pipe.unet)
+    for key, value in state["unet_lora_state_dict"].items():
+        if key not in loaded_lora or not torch.allclose(loaded_lora[key].detach().cpu().float(), value.cpu().float()):
+            raise RuntimeError(f"LoRA warm-start verification failed: {key}")
+    logger.info(f"Verified warm-start weights from {warm_start}; original_step={state.get('global_step')}; optimizer reset")
     conditioner = PAIConditioner(pipe, mapper, prompt, slot_tokens, device, dtype)
 
     optimizer = torch.optim.AdamW(

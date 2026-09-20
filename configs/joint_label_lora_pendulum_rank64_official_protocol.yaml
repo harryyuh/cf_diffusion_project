@@ -1,0 +1,37 @@
+seed: 42
+device: cuda
+condition_mode: joint_label
+output_dir: /work/nvme/bhje/hyu29/ckpts/pendulum/joint_label_lora
+run_name: minisd_label_rank64_equal_budget_official_protocol_20k_seed42
+
+data_root: /work/nvme/bhje/hyu29/datasets/pendulum
+train_split: train
+image_size: 256
+batch_size: 2
+num_workers: 4
+
+pretrained_model_name_or_path: lambdalabs/miniSD-diffusers
+mixed_precision: fp32
+
+pendulum_attr_cols: [pendulum, light, shadow_length, shadow_position]
+pai_prompt: "a image of @ and * and & and !"
+pai_slot_tokens: ["@", "*", "&", "!"]
+pai_projector_hidden_dim: 256
+pai_init_std: 0.02
+pai_lr: 0.001
+
+lora_lr: 0.00005
+lora_rank: 64
+lora_alpha: 64
+lora_target_modules: [to_q, to_k, to_v, to_out.0]
+
+gradient_accumulation_steps: 1
+max_train_steps: 20000
+lr_scheduler: constant
+lr_warmup_steps: 0
+weight_decay: 0.0
+max_grad_norm: 1.0
+adam_betas: [0.9, 0.999]
+log_every: 25
+save_every: 5000
+lambda_ctc: 0.0

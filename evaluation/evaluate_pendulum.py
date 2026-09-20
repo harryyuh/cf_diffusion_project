@@ -45,6 +45,7 @@ def parse_args():
     p.add_argument('--max-samples', type=int, default=256)
     p.add_argument('--batch-size', type=int, default=1)
     p.add_argument('--steps', type=int, default=50)
+    p.add_argument('--guidance-scale', type=float, default=1.0)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--grid-samples', type=int, default=8)
     return p.parse_args()
@@ -102,12 +103,13 @@ def tensor_to_pil(images: torch.Tensor):
 
 
 class PAIEditor:
-    def __init__(self, config_path: str, root: str, device: torch.device, steps: int, condition_mode: str = 'pai'):
+    def __init__(self, config_path: str, root: str, device: torch.device, steps: int,
+                 condition_mode: str = 'pai', guidance_scale: float = 1.0):
         from evaluation.evaluate_latent_prompt_lora_celeba import PromptLoraEditor
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
         self.inner = PromptLoraEditor(
-            cfg, Path(root) / 'lora', device, steps, guidance_scale=1.0,
+            cfg, Path(root) / 'lora', device, steps, guidance_scale=guidance_scale,
             invert_guidance_scale=1.0, negative_prompt='', scheduler_mode='ca',
             vae_latent_mode='mean', condition_mode=condition_mode,
             pai_checkpoint=Path(root) / 'mapper' / 'pai_mapper.pt',
@@ -217,10 +219,13 @@ def main():
     if args.method == 'ca':
         editor = CAEditor(args, device)
     elif args.method == 'joint_label':
-        editor = PAIEditor(args.joint_config, args.joint_root, device, args.steps, 'joint_label')
+        editor = PAIEditor(args.joint_config, args.joint_root, device, args.steps,
+                           'joint_label', args.guidance_scale)
     else:
-        editor = PAIEditor(args.pai_config, args.pai_root, device, args.steps, 'pai')
-    results = {'method': args.method, 'n': len(indices), 'steps': args.steps, 'interventions': {}}
+        editor = PAIEditor(args.pai_config, args.pai_root, device, args.steps,
+                           'pai', args.guidance_scale)
+    results = {'method': args.method, 'n': len(indices), 'steps': args.steps,
+               'guidance_scale': args.guidance_scale, 'interventions': {}}
 
     for do_idx, do_name in enumerate(PENDULUM_ATTRS):
         sums = torch.zeros(4)
@@ -258,6 +263,10 @@ def main():
         make_pair_grid(grid_records, grid_root / f'{do_name}.png', f'{args.method.upper()} do({do_name})')
         results['interventions'][do_name] = {
             'target_mae_raw': {name: float(mae[i]) for i, name in enumerate(PENDULUM_ATTRS)},
+            'target_mae_normalized': {
+                name: float(mae[i] / (PENDULUM_MINMAX[i, 1] - PENDULUM_MINMAX[i, 0]))
+                for i, name in enumerate(PENDULUM_ATTRS)
+            },
             'intervened_variable_mae_raw': float(mae[do_idx]),
             'intervened_variable_mae_normalized': float(
                 mae[do_idx] / (PENDULUM_MINMAX[do_idx, 1] - PENDULUM_MINMAX[do_idx, 0])
