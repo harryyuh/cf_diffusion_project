@@ -40,18 +40,15 @@ def main():
     ck = torch.load(args.vae_checkpoint, map_location="cpu")
     vae.load_state_dict(ck["state_dict"])
 
-    ds = CelebADataset(args.celeba_root, "test", ATTRS, image_size=64)
-    tf = transforms.Compose([transforms.CenterCrop(150), transforms.Resize((64,64),
-        interpolation=transforms.InterpolationMode.BICUBIC), transforms.ToTensor()])
-
     records = []
-    for shard_dir in sorted((Path(args.saved_root)/args.method).glob("shard_*_*"),
+    for shard_dir in sorted((Path(args.saved_root)/args.method).glob("plan_*_*"),
                             key=lambda p:int(p.name.split("_")[1])):
         attr = next(a for a in ATTRS if shard_dir.name.endswith("_"+a))
         for pt in sorted((shard_dir/"tensors").glob("batch_*.pt")):
             obj = torch.load(pt, map_location="cpu")
-            for image, index in zip(obj["images"].float(), obj["source_indices"].tolist()):
-                records.append((int(index), attr, image))
+            for image, real, index, factual, cf in zip(obj["images"].float(), obj["real_images"].float(),
+                    obj["source_indices"].tolist(), obj["factual_labels"], obj["counterfactual_labels"]):
+                records.append((int(index), attr, image, real, factual, cf))
     if not records: raise RuntimeError("No saved tensors found")
     if len({r[0] for r in records}) != len(records): raise RuntimeError("Duplicate source indices")
 
@@ -59,14 +56,16 @@ def main():
     with torch.no_grad():
         for start in range(0, len(records), args.batch_size):
             chunk = records[start:start+args.batch_size]
-            real = torch.stack([tf(Image.open(Path(args.celeba_root)/"img_align_celeba"/ds._filenames[i]).convert("RGB")) for i,_,_ in chunk]).cuda()
-            fake = torch.stack([x for _,_,x in chunk]).cuda()
+            real = torch.stack([x for _,_,_,x,_,_ in chunk]).cuda()
+            fake = torch.stack([x for _,_,x,_,_,_ in chunk]).cuda()
             rmu, rlog = vae.encoder(real, None); fmu, flog = vae.encoder(fake, None)
             factual_feats.append(torch.stack([rmu,rlog],dim=1).cpu().numpy())
             cf_feats.append(torch.stack([fmu,flog],dim=1).cpu().numpy())
-            for i, attr, _ in chunk:
-                value = int(ds._attrs.iloc[i][attr] > 0)
-                factual_labels.append([value]); cf_labels.append([1-value]); interventions.append(attr)
+            for _, attr, _, _, factual, cf in chunk:
+                j = ATTRS.index(attr)
+                factual_labels.append([int(float(factual[j]) > 0)])
+                cf_labels.append([int(float(cf[j]) > 0)])
+                interventions.append(attr)
 
     rf = np.concatenate(factual_feats); ff = np.concatenate(cf_feats)
     factuals = list(zip(rf, np.asarray(factual_labels)))

@@ -1083,11 +1083,6 @@ def main():
             ptp_cross_replace_steps=args.ptp_cross_replace_steps,
             ptp_self_replace_steps=args.ptp_self_replace_steps,
         )
-        if save_fake_dir is not None:
-            torch.save(
-                {"images": fake.detach().cpu().to(torch.float16), "source_indices": batch["source_index"].cpu()},
-                save_fake_dir / f"batch_{batch_idx:05d}.pt",
-            )
         real = _prepare_real64(data_root, filenames, device)
         cf = _to_01_labels(c_cf)
         cf["image"] = fake
@@ -1095,6 +1090,17 @@ def main():
         for a in COMPLEX_ATTRS:
             preds[a].append(np.asarray(raw["predictions"][a]))
             tgts[a].append(np.asarray(raw["targets"][a]))
+        if save_fake_dir is not None:
+            torch.save({
+                "images": fake.detach().cpu().to(torch.float16),
+                "real_images": real.detach().cpu().to(torch.float16),
+                "source_indices": batch["source_index"].cpu(),
+                "intervention_attr": args.intervention_attr,
+                "predictions": {a: torch.as_tensor(np.asarray(raw["predictions"][a])) for a in COMPLEX_ATTRS},
+                "targets": {a: torch.as_tensor(np.asarray(raw["targets"][a])) for a in COMPLEX_ATTRS},
+                "factual_labels": c_orig.detach().cpu(),
+                "counterfactual_labels": c_cf.detach().cpu(),
+            }, save_fake_dir / f"batch_{batch_idx:05d}.pt")
         real_batches.append(real.detach())
         fake_batches.append(fake.detach())
         mse_vals.extend(((real - fake) ** 2).mean(dim=(1, 2, 3)).detach().cpu().numpy().tolist())

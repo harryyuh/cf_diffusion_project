@@ -19,22 +19,36 @@ source /work/nvme/bhje/hyu29/venvs/cf-celeba/bin/activate
 
 PROJECT=/work/nvme/bhje/hyu29/repos/cf-diffusion-celeba
 CA_ROOT=${PROJECT}/external/Causal-Adapter
-OUT=/work/nvme/bhje/hyu29/evaluations/celeba/ca_protocol_fulltest_ddim100
+RUN_MODE=${RUN_MODE:-full}
+PLAN_ROOT=/work/nvme/bhje/hyu29/evaluations/celeba/ca_official_fulltest_ddim100/plans
+if [[ "${RUN_MODE}" == "smoke" ]]; then
+  OUT=/work/nvme/bhje/hyu29/evaluations/celeba/ca_official_fulltest_ddim100_smoke
+else
+  OUT=/work/nvme/bhje/hyu29/evaluations/celeba/ca_official_fulltest_ddim100
+fi
 OFFICIAL=/work/nvme/bhje/hyu29/ckpts/celeba/ca_author_official_200k
 LABEL=/work/nvme/bhje/hyu29/ckpts/celeba/joint_label_lora/joint_20k_bs2/checkpoints/step_020000
-NUM_SHARDS=80
+NUM_PLANS=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["num_plans"])' "${PLAN_ROOT}/manifest.json")
+TASKS_PER_METHOD=${NUM_PLANS}
 
 export PYTHONPATH=${CA_ROOT}/diffusers/src:${CA_ROOT}/notebook_benchmarks:${CA_ROOT}:${PROJECT}:${PYTHONPATH:-}
 export HF_HOME=/work/nvme/bhje/hyu29/huggingface
 cd "${PROJECT}"
 
 TASK=${SLURM_ARRAY_TASK_ID}
-if (( TASK < NUM_SHARDS )); then METHOD=ca; SHARD=${TASK}; else METHOD=label_only; SHARD=$((TASK-NUM_SHARDS)); fi
-ATTRS=(Young Male No_Beard Bald)
-ATTR=${ATTRS[$((SHARD%4))]}
-SEL=${OUT}/plans/shard_${SHARD}.json
+if (( TASK < TASKS_PER_METHOD )); then
+  METHOD=ca
+  LOCAL_TASK=${TASK}
+else
+  METHOD=label_only
+  LOCAL_TASK=$((TASK-TASKS_PER_METHOD))
+fi
+PLAN=${LOCAL_TASK}
+SEL=$(printf "%s/plan_%03d.json" "${PLAN_ROOT}" "${PLAN}")
+ATTR=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["intervention_attr"])' "${SEL}")
 COUNT=$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["male_indices"]))' "${SEL}")
-METHOD_OUT=${OUT}/${METHOD}/shard_${SHARD}_${ATTR}
+if [[ "${RUN_MODE}" == "smoke" ]]; then COUNT=8; fi
+METHOD_OUT=$(printf "%s/%s/plan_%03d_%s" "${OUT}" "${METHOD}" "${PLAN}" "${ATTR}")
 DONE=${METHOD_OUT}/DONE
 if [[ -f "${DONE}" ]]; then echo "already complete ${DONE}"; exit 0; fi
 mkdir -p "${METHOD_OUT}/tensors"

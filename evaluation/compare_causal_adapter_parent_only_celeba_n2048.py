@@ -478,11 +478,6 @@ def main() -> None:
     for batch_idx, batch in enumerate(tqdm(loader, desc="compare")):
         real = ca_gen.official_real64(batch)
         ca_cf = ca_gen(batch)
-        if save_fake_dir is not None:
-            torch.save(
-                {"images": ca_cf["image"].detach().cpu().to(torch.float16), "source_indices": batch["source_index"].cpu()},
-                save_fake_dir / f"batch_{batch_idx:05d}.pt",
-            )
         method_outputs = [("causal_adapter", ca_cf)]
         if po_gen is not None:
             po_cf = {k: ca_cf[k].detach() for k in COMPLEX_ATTRS}
@@ -495,6 +490,17 @@ def main() -> None:
             for a in COMPLEX_ATTRS:
                 slot["eff_predictions"][a].append(np.asarray(_raw["predictions"][a]))
                 slot["eff_targets"][a].append(np.asarray(_raw["targets"][a]))
+            if save_fake_dir is not None and name == "causal_adapter":
+                torch.save({
+                    "images": cf["image"].detach().cpu().to(torch.float16),
+                    "real_images": real.detach().cpu().to(torch.float16),
+                    "source_indices": batch["source_index"].cpu(),
+                    "intervention_attr": args.intervention_attr,
+                    "predictions": {a: torch.as_tensor(np.asarray(_raw["predictions"][a])) for a in COMPLEX_ATTRS},
+                    "targets": {a: torch.as_tensor(np.asarray(_raw["targets"][a])) for a in COMPLEX_ATTRS},
+                    "factual_labels": torch.cat([batch[a].reshape(-1, 1) for a in COMPLEX_ATTRS], dim=1).cpu(),
+                    "counterfactual_labels": torch.cat([cf[a].reshape(-1, 1) for a in COMPLEX_ATTRS], dim=1).detach().cpu(),
+                }, save_fake_dir / f"batch_{batch_idx:05d}.pt")
             fake = cf["image"].detach()
             slot["all_real"].append(real.detach())
             slot["all_fake"].append(fake.detach())

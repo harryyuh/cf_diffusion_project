@@ -226,7 +226,16 @@ def main() -> None:
         drop_last=True,
     )
 
-    pipe = StableDiffusionPipeline.from_pretrained(str(cfg["pretrained_model_name_or_path"]), torch_dtype=dtype).to(device)
+    # The safety checker is never used by the noise-prediction training loop.
+    # Disabling it also avoids transformers/diffusers compatibility failures
+    # while loading older MiniSD safety-checker weights.
+    pipe = StableDiffusionPipeline.from_pretrained(
+        str(cfg["pretrained_model_name_or_path"]),
+        torch_dtype=dtype,
+        safety_checker=None,
+        feature_extractor=None,
+        requires_safety_checker=False,
+    ).to(device)
     noise_scheduler = DDPMScheduler.from_pretrained(str(cfg["pretrained_model_name_or_path"]), subfolder="scheduler")
     pipe.vae.eval()
     pipe.unet.eval()

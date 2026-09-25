@@ -17,7 +17,8 @@ module load python/miniforge3_pytorch/2.10.0
 source /work/nvme/bhje/hyu29/venvs/cf-celeba/bin/activate
 
 PROJECT=/work/nvme/bhje/hyu29/repos/cf-diffusion-celeba
-export PYTHONPATH="${PROJECT}:${PROJECT}/external/Causal-Adapter/diffusers/src:${PYTHONPATH:-}"
+CA_ROOT=${PROJECT}/external/Causal-Adapter
+export PYTHONPATH="${CA_ROOT}/diffusers/src:${CA_ROOT}:${PROJECT}:${PYTHONPATH:-}"
 export HF_HOME=/work/nvme/bhje/hyu29/huggingface
 cd "${PROJECT}"
 

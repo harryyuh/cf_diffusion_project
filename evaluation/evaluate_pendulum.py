@@ -48,6 +48,13 @@ def parse_args():
     p.add_argument('--guidance-scale', type=float, default=1.0)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--grid-samples', type=int, default=8)
+    p.add_argument(
+        '--conditioning-target', choices=['full_scm', 'intervention_only'],
+        default='full_scm',
+        help=('Condition the editor on the complete SCM counterfactual vector, or '
+              'change only the intervened coordinate. Evaluation targets always '
+              'remain the complete SCM counterfactual.'),
+    )
     return p.parse_args()
 
 
@@ -226,6 +233,7 @@ def main():
                            'pai', args.guidance_scale)
     results = {'method': args.method, 'n': len(indices), 'steps': args.steps,
                'guidance_scale': args.guidance_scale, 'interventions': {}}
+    results['conditioning_target'] = args.conditioning_target
 
     for do_idx, do_name in enumerate(PENDULUM_ATTRS):
         sums = torch.zeros(4)
@@ -244,10 +252,14 @@ def main():
             intervention_raw = source_raw.clone()
             intervention_raw[:, do_idx] = torch.stack([train[i]['raw_factors'][do_idx] for i in train_ids]).to(device)
             _, target_raw, target_unit = scm_target(scm, source_raw, do_idx, intervention_raw)
+            if args.conditioning_target == 'intervention_only':
+                condition_unit = normalize_pendulum(intervention_raw)
+            else:
+                condition_unit = target_unit
             if args.method == 'ca':
                 cf = editor.edit(paths, source_raw, do_idx, intervention_raw)
             else:
-                cf = editor.edit(paths, source_unit, target_unit)
+                cf = editor.edit(paths, source_unit, condition_unit)
             cf_tensor = pil_to_tensor(cf).to(device)
             pred_unit = regressor(cf_tensor)
             pred_raw = denormalize_pendulum(pred_unit).to(device)
