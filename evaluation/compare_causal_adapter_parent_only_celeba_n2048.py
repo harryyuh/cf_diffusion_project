@@ -13,6 +13,7 @@ Evaluation protocol (shared across methods):
 from __future__ import annotations
 
 import argparse
+import time
 import json
 import os
 import random
@@ -264,8 +265,12 @@ class CausalAdapterGenerator:
             else:
                 image_t = self._source_to_ca(xs)
             label = torch.cat([labels[k] for k in COMPLEX_ATTRS], dim=1)
-            target_labels = label.clone()
-            target_labels[:, intervention_idx] = target_attr[:, 0]
+            # Match the official CA evaluation path: apply the intervention
+            # through the learned SCM so root interventions propagate to
+            # descendants and the CelebA No_Beard OOD rule is preserved.
+            # Passing a hand-edited DSCM_labels tensor here bypasses the SCM
+            # and produces a different counterfactual target from the
+            # Label-only evaluator for Young/Male/No_Beard.
             images, _, causal_cond, _ = self.ddim(
                 self.assets.pipe,
                 image_t,
@@ -275,10 +280,10 @@ class CausalAdapterGenerator:
                 num_steps=self.args.ca_steps,
                 invert_guidance_scale=self.args.ca_invert_guidance_scale,
                 set_guidance_scale=self.args.ca_guidance_scale,
-                intervention_indx=None,
-                intervention_values=None,
+                intervention_indx=intervention_idx,
+                intervention_values=target_attr[:, 0],
                 return_PIL=True,
-                DSCM_labels=target_labels.unsqueeze(2),
+                DSCM_labels=None,
             )
             if len(images) != image_t.shape[0]:
                 raise RuntimeError(f"Expected {image_t.shape[0]} CA images, got {len(images)}")
@@ -316,8 +321,6 @@ class CausalAdapterGenerator:
                     DSCM_labels=None,
                 )
             else:
-                target_labels = label.clone()
-                target_labels[:, intervention_idx] = target_value
                 images, _, causal_cond, _ = self.ddim(
                     self.assets.pipe,
                     image_t,
@@ -327,10 +330,10 @@ class CausalAdapterGenerator:
                     num_steps=self.args.ca_steps,
                     invert_guidance_scale=self.args.ca_invert_guidance_scale,
                     set_guidance_scale=self.args.ca_guidance_scale,
-                    intervention_indx=None,
-                    intervention_values=None,
+                    intervention_indx=intervention_idx,
+                    intervention_values=target_value,
                     return_PIL=True,
-                    DSCM_labels=target_labels.unsqueeze(2),
+                    DSCM_labels=None,
                 )
             outs.append(self._pil_to_tensor64(images[-1]))
             cf_label_rows.append((causal_cond.squeeze(-1) > 0.5).float().view(1, -1))
@@ -475,9 +478,21 @@ def main() -> None:
     save_fake_dir = Path(args.save_fake_dir) if args.save_fake_dir else None
     if save_fake_dir is not None:
         save_fake_dir.mkdir(parents=True, exist_ok=True)
+    generation_seconds = []
+    generation_peak_allocated_bytes = []
+    generation_incremental_peak_bytes = []
     for batch_idx, batch in enumerate(tqdm(loader, desc="compare")):
         real = ca_gen.official_real64(batch)
+        torch.cuda.synchronize(device)
+        baseline_allocated = torch.cuda.memory_allocated(device)
+        torch.cuda.reset_peak_memory_stats(device)
+        started = time.perf_counter()
         ca_cf = ca_gen(batch)
+        torch.cuda.synchronize(device)
+        generation_seconds.append(time.perf_counter() - started)
+        peak_allocated = torch.cuda.max_memory_allocated(device)
+        generation_peak_allocated_bytes.append(peak_allocated)
+        generation_incremental_peak_bytes.append(max(0, peak_allocated - baseline_allocated))
         method_outputs = [("causal_adapter", ca_cf)]
         if po_gen is not None:
             po_cf = {k: ca_cf[k].detach() for k in COMPLEX_ATTRS}
@@ -544,7 +559,20 @@ def main() -> None:
             },
         }
         print(name, json.dumps(results["methods"][name], indent=2))
-
+    timed = generation_seconds[1:] if len(generation_seconds) > 1 else generation_seconds
+    batch_sizes = [min(args.batch_size, len(indices) - i * args.batch_size) for i in range(len(generation_seconds))]
+    timed_sizes = batch_sizes[1:] if len(batch_sizes) > 1 else batch_sizes
+    results["generation_profile"] = {
+        "scope": "DDIM inversion plus counterfactual denoising only; excludes model loading, predictors, metrics, and saving",
+        "warmup_batches_excluded": 1 if len(generation_seconds) > 1 else 0,
+        "timed_batches": len(timed),
+        "timed_images": int(sum(timed_sizes)),
+        "seconds": float(sum(timed)),
+        "seconds_per_image": float(sum(timed) / sum(timed_sizes)),
+        "images_per_second": float(sum(timed_sizes) / sum(timed)),
+        "peak_allocated_gib": float(max(generation_peak_allocated_bytes) / 2**30),
+        "incremental_peak_gib": float(max(generation_incremental_peak_bytes) / 2**30),
+    }
     out = Path(args.output_json)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:

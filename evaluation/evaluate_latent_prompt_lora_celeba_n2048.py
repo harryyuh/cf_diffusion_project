@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 import importlib.util
 import json
 import os
@@ -1062,6 +1063,9 @@ def main():
     save_fake_dir = Path(args.save_fake_dir) if args.save_fake_dir else None
     if save_fake_dir is not None:
         save_fake_dir.mkdir(parents=True, exist_ok=True)
+    generation_seconds = []
+    generation_peak_allocated_bytes = []
+    generation_incremental_peak_bytes = []
     for batch_idx, batch in enumerate(tqdm(loader, desc="prompt-lora eval")):
         filenames = batch["filename"]
         c_orig = _labels_pm1(batch, device)
@@ -1073,6 +1077,10 @@ def main():
                 [scm.intervene_pm1(c_orig[i : i + 1], intervention_idx, target_value[i].item()) for i in range(c_orig.shape[0])],
                 dim=0,
             )
+        torch.cuda.synchronize(device)
+        baseline_allocated = torch.cuda.memory_allocated(device)
+        torch.cuda.reset_peak_memory_stats(device)
+        started = time.perf_counter()
         fake = editor.edit(
             data_root,
             filenames,
@@ -1083,6 +1091,11 @@ def main():
             ptp_cross_replace_steps=args.ptp_cross_replace_steps,
             ptp_self_replace_steps=args.ptp_self_replace_steps,
         )
+        torch.cuda.synchronize(device)
+        generation_seconds.append(time.perf_counter() - started)
+        peak_allocated = torch.cuda.max_memory_allocated(device)
+        generation_peak_allocated_bytes.append(peak_allocated)
+        generation_incremental_peak_bytes.append(max(0, peak_allocated - baseline_allocated))
         real = _prepare_real64(data_root, filenames, device)
         cf = _to_01_labels(c_cf)
         cf["image"] = fake
@@ -1107,6 +1120,9 @@ def main():
         mae_vals.extend((real - fake).abs().mean(dim=(1, 2, 3)).detach().cpu().numpy().tolist())
         lpips_metric.update(fake, real)
 
+    timed = generation_seconds[1:] if len(generation_seconds) > 1 else generation_seconds
+    batch_sizes = [min(args.batch_size, len(indices) - i * args.batch_size) for i in range(len(generation_seconds))]
+    timed_sizes = batch_sizes[1:] if len(batch_sizes) > 1 else batch_sizes
     result = {
         "args": vars(args),
         "num_samples": len(indices),
@@ -1130,6 +1146,17 @@ def main():
             else None,
         },
         "method": f"minisd_{args.condition_mode}_lora_{args.editing}_{args.inversion}",
+        "generation_profile": {
+            "scope": "DDIM inversion plus counterfactual denoising only; excludes model loading, predictors, metrics, and saving",
+            "warmup_batches_excluded": 1 if len(generation_seconds) > 1 else 0,
+            "timed_batches": len(timed),
+            "timed_images": int(sum(timed_sizes)),
+            "seconds": float(sum(timed)),
+            "seconds_per_image": float(sum(timed) / sum(timed_sizes)),
+            "images_per_second": float(sum(timed_sizes) / sum(timed)),
+            "peak_allocated_gib": float(max(generation_peak_allocated_bytes) / 2**30),
+            "incremental_peak_gib": float(max(generation_incremental_peak_bytes) / 2**30),
+        },
         "effectiveness": {a: _binary_f1(np.concatenate(preds[a], 0), np.concatenate(tgts[a], 0)) for a in COMPLEX_ATTRS},
         "effectiveness_accuracy": {
             a: _binary_accuracy(np.concatenate(preds[a], 0), np.concatenate(tgts[a], 0))

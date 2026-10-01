@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--vae-checkpoint", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--batch-size", type=int, default=128)
+    ap.add_argument('--smoke', action='store_true')
     args = ap.parse_args()
 
     bench = Path(args.benchmark_root)
@@ -51,6 +52,10 @@ def main():
                 records.append((int(index), attr, image, real, factual, cf))
     if not records: raise RuntimeError("No saved tensors found")
     if len({r[0] for r in records}) != len(records): raise RuntimeError("Duplicate source indices")
+    if {r[0] for r in records} != set(range(19962)):
+        raise RuntimeError('Incomplete full-test source coverage')
+    if args.smoke:
+        records = records[:32]
 
     factual_feats, cf_feats, factual_labels, cf_labels, interventions = [], [], [], [], []
     with torch.no_grad():
@@ -71,6 +76,8 @@ def main():
     factuals = list(zip(rf, np.asarray(factual_labels)))
     counterfactuals = list(zip(ff, np.asarray(cf_labels)))
     scores, prob1, prob2 = minimality(factuals, counterfactuals, interventions, None, "vae")
+    if len(scores) != len(records):
+        raise RuntimeError('CLD skipped samples; score alignment is invalid')
     raw_kl = kl_divergence(ff, rf)
     per_attr = {}
     for attr in ATTRS:
@@ -81,6 +88,7 @@ def main():
                           "raw_vae_kl_std":float(raw_kl[ids].std()),
                           "cld_minimality_mean":float(attr_scores.mean()) if len(attr_scores) else None}
     out = {"method":args.method, "n":len(records), "vae_checkpoint":args.vae_checkpoint,
+           "smoke_only":args.smoke,
            "official_code_compatibility":"uses benchmark minimality.py and its KL implementation unchanged",
            "cld_minimality_mean":float(np.mean(scores)), "cld_minimality_std":float(np.std(scores)),
            "prob1_mean":float(np.mean(prob1)), "prob2_mean":float(np.mean(prob2)),

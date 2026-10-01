@@ -1,5 +1,6 @@
 """Merge CA-official full-test outputs from sample-level saved data."""
 import json
+import argparse
 from pathlib import Path
 import numpy as np
 import torch
@@ -10,9 +11,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from data.celeba_dataset import CELEBA_ATTR_ORDER, CelebADataset
 
-ROOT = Path("/work/nvme/bhje/hyu29/evaluations/celeba/ca_official_fulltest_ddim100")
 DATA = Path("/work/nvme/bhje/hyu29/datasets/celebA")
-MANIFEST = ROOT / "plans/manifest.json"
 ATTRS = ("Young", "Male", "No_Beard", "Bald")
 EXPECTED = 19962
 
@@ -34,7 +33,9 @@ class OfficialRealTrain(Dataset):
 
 def pred_labels(x):
     x = np.asarray(x)
-    return (x > 0.0) if (np.nanmin(x) < 0.0 or np.nanmax(x) > 1.0) else (x > 0.5)
+    # CelebaComplexClassifier.forward returns logits, including when all
+    # observed values happen to lie between zero and one.
+    return x > 0.0
 
 def f1(pred, target):
     p, t = pred_labels(pred).reshape(-1), (np.asarray(target).reshape(-1) > 0.5)
@@ -42,8 +43,8 @@ def f1(pred, target):
     d = 2*tp + fp + fn
     return {"f1": float(2*tp/d) if d else 0.0, "tp": int(tp), "fp": int(fp), "fn": int(fn), "n": int(len(t))}
 
-def records(method):
-    files = sorted((ROOT / method).glob("plan_*_*/tensors/batch_*.pt"))
+def records(root, method):
+    files = sorted((root / method).glob("plan_*_*/tensors/batch_*.pt"))
     for path in files:
         obj = torch.load(path, map_location="cpu")
         n = len(obj["images"])
@@ -52,7 +53,15 @@ def records(method):
         yield path, obj, n
 
 def main():
-    manifest = json.loads(MANIFEST.read_text())
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--smoke', action='store_true')
+    parser.add_argument('--root', type=Path, default=Path('/work/nvme/bhje/hyu29/evaluations/celeba/ca_official_fulltest_ddim100'))
+    parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--output', type=Path)
+    args = parser.parse_args()
+    root = args.root
+    manifest_path = args.manifest or (root / 'plans/manifest.json')
+    manifest = json.loads(manifest_path.read_text())
     assert len(manifest["assignment"]) == EXPECTED
     device = torch.device("cuda")
     real_loader = DataLoader(OfficialRealTrain(), batch_size=128, num_workers=8, pin_memory=True)
@@ -67,11 +76,14 @@ def main():
     for method in ("ca", "label_only"):
         fid_metric = FrechetInceptionDistance(normalize=True, reset_real_features=False).set_dtype(torch.float32).to(device)
         lpips_metric = LearnedPerceptualImagePatchSimilarity(net_type="alex", normalize=True).to(device)
-        for real in real_loader:
+        for real_idx, real in enumerate(real_loader):
             fid_metric.update(real.to(device, non_blocking=True), real=True)
+            if args.smoke:
+                break
         preds = {a: [] for a in ATTRS}; targets = {a: [] for a in ATTRS}
+        by_do = {d: {a: [[], []] for a in ATTRS} for d in ATTRS}
         per_intervention = {a: 0 for a in ATTRS}; seen = []; count = 0
-        for _, obj, n in records(method):
+        for _, obj, n in records(root, method):
             fake = obj["images"].float().to(device)
             real = obj["real_images"].float().to(device)
             fid_metric.update(fake, real=False)
@@ -79,10 +91,14 @@ def main():
             for a in ATTRS:
                 preds[a].append(torch.as_tensor(obj["predictions"][a]).cpu().numpy())
                 targets[a].append(torch.as_tensor(obj["targets"][a]).cpu().numpy())
+                by_do[str(obj['intervention_attr'])][a][0].append(preds[a][-1])
+                by_do[str(obj['intervention_attr'])][a][1].append(targets[a][-1])
             per_intervention[str(obj["intervention_attr"])] += n
             seen.extend(torch.as_tensor(obj["source_indices"]).tolist())
             count += n
-        if count != EXPECTED or len(set(seen)) != EXPECTED:
+            if args.smoke and count >= 16:
+                break
+        if not args.smoke and (count != EXPECTED or set(seen) != set(range(EXPECTED))):
             raise RuntimeError(f"{method}: expected {EXPECTED} unique samples, found {count}/{len(set(seen))}")
         result[method] = {
             "num_fake": count,
@@ -90,8 +106,11 @@ def main():
             "fid": float(fid_metric.compute().cpu()),
             "lpips_identity": float(lpips_metric.compute().cpu()),
             "effectiveness": {a: f1(np.concatenate(preds[a]), np.concatenate(targets[a])) for a in ATTRS},
+            "effectiveness_by_do": {d: {a: f1(np.concatenate(p), np.concatenate(t))
+                for a, (p, t) in values.items() if p} for d, values in by_do.items()},
         }
-    out = ROOT / "merged_metrics_fid_f1_lpips.json"
+    result['smoke_only'] = args.smoke
+    out = args.output or (root / ('smoke_metrics_fid_f1_lpips.json' if args.smoke else 'merged_metrics_fid_f1_lpips.json'))
     out.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 
