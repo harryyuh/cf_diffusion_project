@@ -73,23 +73,45 @@ def main():
                 interventions.append(attr)
 
     rf = np.concatenate(factual_feats); ff = np.concatenate(cf_feats)
-    factuals = list(zip(rf, np.asarray(factual_labels)))
-    counterfactuals = list(zip(ff, np.asarray(cf_labels)))
-    scores, prob1, prob2 = minimality(factuals, counterfactuals, interventions, None, "vae")
-    if len(scores) != len(records):
-        raise RuntimeError('CLD skipped samples; score alignment is invalid')
+    factual_labels = np.asarray(factual_labels)
+    cf_labels = np.asarray(cf_labels)
+    intervention_names = np.asarray(interventions)
+    scores = np.full(len(records), np.nan, dtype=np.float64)
+    prob1 = np.full(len(records), np.nan, dtype=np.float64)
+    prob2 = np.full(len(records), np.nan, dtype=np.float64)
+    # Benchmark minimality() groups reference images by a scalar parent value.
+    # Pooling all four binary attributes would mix, e.g., Male=1 with Bald=1.
+    # Invoke it separately for each intervention, preserving its implementation.
+    for attr in ATTRS:
+        ids = np.flatnonzero(intervention_names == attr)
+        if len(ids) == 0:
+            continue
+        if len(np.unique(factual_labels[ids, 0])) != 2:
+            raise RuntimeError(f'{attr}: both factual reference classes are required')
+        factuals = list(zip(rf[ids], factual_labels[ids]))
+        counterfactuals = list(zip(ff[ids], cf_labels[ids]))
+        attr_scores, attr_prob1, attr_prob2 = minimality(
+            factuals, counterfactuals, [attr] * len(ids), None, 'vae'
+        )
+        if len(attr_scores) != len(ids):
+            raise RuntimeError(f'{attr}: CLD skipped samples; score alignment is invalid')
+        scores[ids] = attr_scores
+        prob1[ids] = attr_prob1
+        prob2[ids] = attr_prob2
+    if not np.isfinite(scores).all():
+        raise RuntimeError('CLD left samples without a score')
     raw_kl = kl_divergence(ff, rf)
     per_attr = {}
     for attr in ATTRS:
-        ids = np.asarray([x == attr for x in interventions])
-        # Official minimality returns one score per input here because both binary reference groups exist.
-        attr_scores = np.asarray(scores)[ids] if len(scores) == len(records) else np.asarray([])
+        ids = intervention_names == attr
+        attr_scores = scores[ids]
         per_attr[attr] = {"n":int(ids.sum()), "raw_vae_kl_mean":float(raw_kl[ids].mean()),
                           "raw_vae_kl_std":float(raw_kl[ids].std()),
                           "cld_minimality_mean":float(attr_scores.mean()) if len(attr_scores) else None}
     out = {"method":args.method, "n":len(records), "vae_checkpoint":args.vae_checkpoint,
            "smoke_only":args.smoke,
            "official_code_compatibility":"uses benchmark minimality.py and its KL implementation unchanged",
+           "reference_grouping":"separate factual reference pool for each intervention attribute",
            "cld_minimality_mean":float(np.mean(scores)), "cld_minimality_std":float(np.std(scores)),
            "prob1_mean":float(np.mean(prob1)), "prob2_mean":float(np.mean(prob2)),
            "raw_vae_kl_mean":float(np.mean(raw_kl)), "raw_vae_kl_std":float(np.std(raw_kl)),

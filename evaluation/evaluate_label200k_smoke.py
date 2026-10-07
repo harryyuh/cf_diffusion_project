@@ -168,10 +168,10 @@ def _causal_adapter_intervene_pm1(head, labels_pm1: torch.Tensor, intervention_i
 
 
 def _binary_pred_labels(pred: np.ndarray) -> np.ndarray:
-    pred = np.asarray(pred)
-    if np.nanmin(pred) < 0.0 or np.nanmax(pred) > 1.0:
-        return pred > 0.0
-    return pred > 0.5
+    # CelebaComplexClassifier.forward returns BCEWithLogitsLoss inputs.  A
+    # threshold inferred from other samples in the batch changes a sample's
+    # prediction when the batch composition changes.
+    return np.asarray(pred) > 0.0
 
 
 def _binary_f1(pred: np.ndarray, target: np.ndarray) -> float:

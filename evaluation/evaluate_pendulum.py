@@ -24,7 +24,7 @@ from data.pendulum_dataset import (
 from training.train_pendulum_regressor import PendulumRegressor
 
 CA_MEAN_SPREAD = torch.tensor([[2, 42], [104, 44], [7.5, 4.5], [11, 8]], dtype=torch.float32)
-CA_GRAPH = torch.tensor([[0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 0, 0], [0, 0, 1, 0]], dtype=torch.float32)
+CA_GRAPH = torch.tensor([[0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]], dtype=torch.float32)
 
 
 def parse_args():
@@ -42,7 +42,11 @@ def parse_args():
     p.add_argument('--joint-root', default='/scratch/gilbreth/yu1331/ckpts/pendulum/joint_label_lora/minisd_joint_label_lora/final')
     p.add_argument('--regressor', default='/scratch/gilbreth/yu1331/ckpts/pendulum/regressor/best.pt')
     p.add_argument('--output-dir', required=True)
-    p.add_argument('--max-samples', type=int, default=256)
+    p.add_argument('--max-samples', type=int, default=256,
+                   help='0 evaluates the complete available test directory')
+    p.add_argument('--shard-index', type=int, default=0)
+    p.add_argument('--shard-size', type=int, default=0,
+                   help='0 disables sharding; otherwise selects a fixed contiguous shard')
     p.add_argument('--batch-size', type=int, default=1)
     p.add_argument('--steps', type=int, default=50)
     p.add_argument('--guidance-scale', type=float, default=1.0)
@@ -138,7 +142,9 @@ class PAIEditor:
         pe_src, ne = self.inner.condition_embeds(source_unit)
         pe_tgt, _ = self.inner.condition_embeds(target_unit)
         lat_t = self.inner.invert(lat0, pe_src, ne)
-        return tensor_to_pil(self.inner.decode64(self.inner.sample(lat_t, pe_tgt, ne)))
+        lat_cf = self.inner.sample(lat_t, pe_tgt, ne)
+        image = pipe.vae.decode(lat_cf / pipe.vae.config.scaling_factor).sample
+        return tensor_to_pil((image.float() / 2 + 0.5).clamp(0, 1))
 
 
 class CAEditor:
@@ -211,13 +217,26 @@ def main():
 
     test = PendulumDataset(args.data_root, 'test', image_size=256)
     train = PendulumDataset(args.data_root, 'train', image_size=256)
-    indices = list(range(min(args.max_samples, len(test))))
+    n = len(test) if args.max_samples == 0 else min(args.max_samples, len(test))
+    all_indices = list(range(n))
+    if args.shard_size:
+        if args.shard_index < 0:
+            raise ValueError('shard-index must be non-negative')
+        lo = args.shard_index * args.shard_size
+        indices = all_indices[lo:lo + args.shard_size]
+    else:
+        indices = all_indices
+    if not indices:
+        raise ValueError(f'Empty evaluation shard {args.shard_index}')
     # The benchmark samples intervention values from the train distribution.
     intervention_sources = {
-        j: rng.integers(0, len(train), size=len(indices)).tolist() for j in range(4)
+        j: rng.integers(0, len(train), size=n)[indices].tolist() for j in range(4)
     }
     (output / 'selection.json').write_text(json.dumps({
         'seed': args.seed, 'test_indices': indices,
+        'test_size': len(test), 'evaluation_size': n,
+        'shard_index': args.shard_index, 'shard_size': args.shard_size,
+        'output_resolution': 256, 'regressor_resolution': 128,
         'intervention_train_indices': intervention_sources,
     }, indent=2))
 
