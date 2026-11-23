@@ -325,7 +325,16 @@ class PromptLoraEditor:
         self.capture_ptp_masks = bool(capture_ptp_masks)
         self.ptp_mask_steps = {int(x) for x in ptp_mask_steps}
         self.last_ptp_masks = {}
-        dtype = torch.bfloat16 if str(cfg.get("mixed_precision", "bf16")).lower() == "bf16" else torch.float16
+        precision = str(cfg.get("mixed_precision", "bf16")).lower()
+        dtype_by_precision = {
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+            "fp32": torch.float32,
+            "no": torch.float32,
+        }
+        if precision not in dtype_by_precision:
+            raise ValueError(f"Unsupported mixed_precision: {precision}")
+        dtype = dtype_by_precision[precision]
         pipe_cls = _pipeline_class(str(cfg.get("model_family", "sd")))
         self.pipe = pipe_cls.from_pretrained(
             str(cfg["pretrained_model_name_or_path"]),
@@ -334,6 +343,8 @@ class PromptLoraEditor:
             requires_safety_checker=False,
         ).to(device)
         self.pipe.load_lora_weights(str(lora_dir))
+        if self.pipe.unet.dtype != dtype:
+            raise RuntimeError(f"UNet loaded as {self.pipe.unet.dtype}, expected {dtype}")
         if scheduler_mode == "ca":
             self.scheduler = DDIMScheduler(
                 beta_start=0.00085,

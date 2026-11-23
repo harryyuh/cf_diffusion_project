@@ -390,12 +390,9 @@ def _pixel_embedding(x: torch.Tensor) -> np.ndarray:
 
 
 def _binary_pred_labels(pred: np.ndarray) -> np.ndarray:
-    pred = np.asarray(pred)
-    # torchmetrics treats out-of-[0,1] float predictions as logits; match that
-    # behavior while still supporting probability-valued predictions.
-    if np.nanmin(pred) < 0.0 or np.nanmax(pred) > 1.0:
-        return pred > 0.0
-    return pred > 0.5
+    # The benchmark CelebaComplexClassifier outputs logits, not probabilities.
+    # Classify each sample independently of the other logits in its batch.
+    return np.asarray(pred) > 0.0
 
 
 def _binary_f1_from_arrays(pred: np.ndarray, target: np.ndarray) -> float:
